@@ -1,8 +1,9 @@
-import { analyzePolicy } from "../api/client";
+
 
 function isPolicyPage(url: string, text: string) {
   const u = url.toLowerCase();
   const t = text.toLowerCase();
+
   return (
     u.includes("privacy") ||
     u.includes("terms") ||
@@ -18,14 +19,20 @@ async function run() {
 
   if (!isPolicyPage(url, text)) return;
 
-  try {
-    const result = await analyzePolicy(url, text);
-    // Save latest analysis for popup to display
-    chrome.storage.local.set({ latestAnalysis: result });
-    console.log("[Data Lawyer] Saved analysis:", result);
-  } catch (e) {
-    console.error("[Data Lawyer] Failed:", e);
-  }
+  chrome.runtime.sendMessage(
+    { type: "ANALYZE_POLICY", url, text },
+    (resp) => {
+      if (chrome.runtime.lastError) {
+        console.error("[Data Lawyer] runtime message error:", chrome.runtime.lastError.message);
+        return;
+      }
+      if (!resp?.ok) {
+        console.error("[Data Lawyer] Analyze failed:", resp?.error);
+        return;
+      }
+      console.log("[Data Lawyer] Analysis saved via background:", resp.data);
+    }
+  );
 }
 
 run();
