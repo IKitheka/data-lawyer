@@ -36,7 +36,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       console.log("[BG] saving analysis to storage:", data);
 
-      await chrome.storage.local.set({ latestAnalysis: data });
+      const stamped = { ...data, saved_at: new Date().toISOString() };
+      await chrome.storage.local.set({ latestAnalysis: stamped });
+
 
       console.log("[BG] analysis saved successfully");
 
