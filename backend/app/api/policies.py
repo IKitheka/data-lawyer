@@ -32,6 +32,7 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     cleaned = normalize_text(payload.text or "")
     h = policy_hash(cleaned)
 
+    # last analysis for this domain (to detect change)
     latest = (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.domain == domain)
@@ -40,61 +41,97 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     )
     policy_changed = bool(latest and latest.policy_hash != h)
 
-    # 1) Rule-based baseline (always)
+    # 1) Rule-based baseline
     analysis = analyze_with_rules(cleaned)
 
-    # 2) Gemini LLM enhancement (optional)
+    # ---- defaults to avoid UnboundLocalError ----
     llm_used = False
+    llm_cached = False
+    llm = {}
+    llm_model = None
+
+    # 2) LLM cache lookup: domain + policy_hash
+    cached = (
+        db.query(PolicyAnalysis)
+        .filter(PolicyAnalysis.domain == domain)
+        .filter(PolicyAnalysis.policy_hash == h)
+        .filter(PolicyAnalysis.llm_summary.isnot(None))
+        .order_by(PolicyAnalysis.created_at.desc())
+        .first()
+    )
+
+    if cached:
+        llm = {
+            "summary": cached.llm_summary,
+            "red_flags": json.loads(cached.llm_red_flags_json or "[]"),
+            "risk_level": cached.llm_risk_level,
+            "model": cached.llm_model,
+        }
+        llm_cached = True
+        llm_model = cached.llm_model
+        print("[LLM] Cache HIT for", domain)
+    else:
+        print("[LLM] Cache MISS for", domain)
+
+    # 3) Gemini LLM enhancement (only on cache miss)
     try:
-        llm = analyze_with_gemini(cleaned, url=url, domain=domain)
+        if not llm_cached:
+            llm = analyze_with_gemini(cleaned, url=url, domain=domain)
+            llm_used = True
+            llm_model = llm.get("model")
+            print("[LLM] Gemini OK. Keys:", list(llm.keys()))
+        else:
+            print("[LLM] Using cached Gemini output.")
 
-        # Helpful debug: you SHOULD see this on every request when Gemini works
-        print("[LLM] Gemini OK. Keys:", list(llm.keys()))
-
-        # Override summary if Gemini provided one
+        # Apply LLM enhancements (if any) to the response analysis
         if isinstance(llm.get("summary"), str) and llm["summary"].strip():
             analysis["summary"] = llm["summary"].strip()
 
-        # Merge red flags (combine unique)
         llm_flags = llm.get("red_flags")
         if isinstance(llm_flags, list) and llm_flags:
             llm_flags = [str(x).strip() for x in llm_flags if str(x).strip()]
             merged = list(dict.fromkeys((analysis.get("red_flags") or []) + llm_flags))
             analysis["red_flags"] = merged
 
-        # Optionally override risk level
         rl = llm.get("risk_level")
         if isinstance(rl, str):
             rl = rl.strip().upper()
             if rl in {"LOW", "MEDIUM", "HIGH"}:
                 analysis["risk_level"] = rl
 
-        llm_used = True
-
     except Exception as e:
-        # Don't crash the API if Gemini fails; just fall back to rules
         print("[LLM] Gemini failed, using rules only:", repr(e))
 
-    # 3) Persist to DB
+    llm_available = llm_used or llm_cached
+
+    # 4) Persist to DB
     row = PolicyAnalysis(
         url=url,
         domain=domain,
         service_name=service_name,
         policy_hash=h,
         raw_text=cleaned[:200000],  # keep DB sane
+
         summary=analysis.get("summary", ""),
         risk_level=analysis.get("risk_level", "UNKNOWN"),
         risk_score=float(analysis.get("risk_score", 0.0)),
         jurisdiction=analysis.get("jurisdiction", "UNKNOWN"),
+
         red_flags_json=json.dumps(analysis.get("red_flags", [])),
         reasoning_json=json.dumps(analysis.get("reasoning", {})),
         extracted_json=json.dumps(analysis.get("extracted", {})),
+
+        llm_summary=(llm.get("summary") if llm_available else None),
+        llm_red_flags_json=(json.dumps(llm.get("red_flags", [])) if llm_available else None),
+        llm_risk_level=(llm.get("risk_level") if llm_available else None),
+        llm_model=(llm_model if llm_available else None),
     )
+
     db.add(row)
     db.commit()
     db.refresh(row)
 
-    # 4) Return API response
+    # 5) Return API response
     return PolicyAnalysisOut(
         id=row.id,
         url=row.url,
@@ -108,8 +145,6 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
         reasoning=json.loads(row.reasoning_json),
         extracted=json.loads(row.extracted_json),
         policy_changed=policy_changed,
-        # Add only if your schema supports it:
-        # llm_used=llm_used,
     )
 
 
