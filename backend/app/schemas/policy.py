@@ -19,6 +19,8 @@ class PolicyAnalysisOut(BaseModel):
     reasoning: dict[str, Any]
     extracted: dict[str, Any]
     policy_changed: bool
+    llm_used: bool = False
+
 
     class Config:
         from_attributes = True
