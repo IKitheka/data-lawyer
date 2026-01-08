@@ -147,45 +147,48 @@ export default function App() {
     chrome.tabs.create({ url: analysis.url });
   }
 
-  // ✅ Stable “Analyze now”: inject function into the current tab to extract text,
-  // then send it to background (background calls backend + saves to storage)
-async function analyzeNow() {
-  setBusy(true);
-  setError(null);
+  // ✅ Final working "Analyze now":
+  // - DOES NOT use chrome.scripting at all (fixes executeScript undefined error)
+  // - Sends FORCE_ANALYZE to the already-registered content script
+  async function analyzeNow() {
+    setBusy(true);
+    setError(null);
 
-  try {
-    const [tabInfo] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab?.id) {
+        setError("No active tab found.");
+        setBusy(false);
+        return;
+      }
 
-    if (!tabInfo?.id) {
-      setError("No active tab found.");
+      chrome.tabs.sendMessage(activeTab.id, { type: "FORCE_ANALYZE" }, (resp) => {
+        const lastErr = chrome.runtime.lastError;
+
+        if (lastErr) {
+          // Most common: the tab wasn't reloaded after installing the extension,
+          // or the page is a Chrome internal page (chrome://), or restricted page.
+          setError(
+            "Could not reach content script. Reload the page (Ctrl+R) and try again. " +
+              "Also note: extensions can’t run on chrome:// pages."
+          );
+          setBusy(false);
+          return;
+        }
+
+        if (!resp?.ok) {
+          setError(resp?.error || "Analyze failed.");
+          setBusy(false);
+          return;
+        }
+
+        setBusy(false);
+      });
+    } catch (e: any) {
+      setError(String(e?.message || e));
       setBusy(false);
-      return;
     }
-
-    chrome.tabs.sendMessage(tabInfo.id, { type: "FORCE_ANALYZE" }, (resp) => {
-      const lastErr = chrome.runtime.lastError;
-      if (lastErr) {
-        setError(
-          "Could not reach content script. Open a normal website tab (not chrome:// pages), refresh the page, then click Analyze now."
-        );
-        setBusy(false);
-        return;
-      }
-
-      if (!resp?.ok) {
-        setError(resp?.error || "Analyze failed.");
-        setBusy(false);
-        return;
-      }
-
-      setBusy(false);
-    });
-  } catch (e: any) {
-    setError(String(e?.message || e));
-    setBusy(false);
   }
-}
-
 
   return (
     <div
@@ -196,9 +199,18 @@ async function analyzeNow() {
       }}
     >
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: 0.2 }}>Data Lawyer</div>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: 0.2 }}>
+            Data Lawyer
+          </div>
           <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
             {loading
               ? "Loading…"
@@ -212,7 +224,14 @@ async function analyzeNow() {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-          <div style={{ fontSize: 12, padding: "6px 10px", borderRadius: 999, ...badgeStyle(analysis?.risk_level) }}>
+          <div
+            style={{
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 999,
+              ...badgeStyle(analysis?.risk_level),
+            }}
+          >
             {analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA"}
           </div>
 
@@ -256,7 +275,14 @@ async function analyzeNow() {
       {/* Main card */}
       <div style={{ height: 12 }} />
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, background: "white" }}>
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 14,
+          padding: 12,
+          background: "white",
+        }}
+      >
         {loading ? (
           <div style={{ fontSize: 13, color: "#444" }}>Loading latest analysis…</div>
         ) : !analysis ? (
@@ -268,13 +294,22 @@ async function analyzeNow() {
           </>
         ) : (
           <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
               <div>
                 <div style={{ fontSize: 13, color: "#111", fontWeight: 800 }}>
                   {analysis.service_name || domain || "Website"}
                 </div>
                 {analysis.url ? (
-                  <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>{clip(analysis.url, 58)}</div>
+                  <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
+                    {clip(analysis.url, 58)}
+                  </div>
                 ) : null}
               </div>
 
@@ -313,7 +348,8 @@ async function analyzeNow() {
                 <div style={{ height: 10 }} />
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ fontSize: 11, color: "#6b7280" }}>
-                    Jurisdiction: <b style={{ color: "#111" }}>{analysis.jurisdiction || "UNKNOWN"}</b>
+                    Jurisdiction:{" "}
+                    <b style={{ color: "#111" }}>{analysis.jurisdiction || "UNKNOWN"}</b>
                   </div>
                   {(analysis as any)?.llm_model ? (
                     <div style={{ fontSize: 11, color: "#6b7280" }}>
@@ -344,7 +380,9 @@ async function analyzeNow() {
                     ))}
                   </ul>
                 ) : (
-                  <div style={{ fontSize: 12, color: "#444", marginTop: 8 }}>No red flags detected.</div>
+                  <div style={{ fontSize: 12, color: "#444", marginTop: 8 }}>
+                    No red flags detected.
+                  </div>
                 )}
               </>
             ) : null}
