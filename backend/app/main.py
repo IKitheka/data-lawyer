@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.init_db import init_db
 from app.api import policies, requests, health
+from app.api.policies import router as policies_router
 
 app = FastAPI(title="Data Lawyer API", version="1.0.0")
 

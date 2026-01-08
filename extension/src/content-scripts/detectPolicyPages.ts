@@ -15,12 +15,12 @@ function isPolicyPage(url: string, text: string) {
 
 async function run() {
   const url = window.location.href;
-  const text = document.body.innerText.slice(0, 20000);
+  const text = document.body.innerText + "\nTEST_CHANGE".slice(0, 20000);
 
   if (!isPolicyPage(url, text)) return;
 
   chrome.runtime.sendMessage(
-    { type: "ANALYZE_POLICY", url, text },
+    { type: "ANALYZE_POLICY", url, text, title:document.title },
     (resp) => {
       if (chrome.runtime.lastError) {
         console.error("[Data Lawyer] runtime message error:", chrome.runtime.lastError.message);

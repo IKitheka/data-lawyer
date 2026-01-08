@@ -101,6 +101,7 @@ export default function App() {
         <div style={{ fontSize: 12, padding: "6px 10px", borderRadius: 999, ...badgeStyle(analysis?.risk_level) }}>
           {analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA"}
         </div>
+        
       </div>
 
       <div style={{ height: 10 }} />
