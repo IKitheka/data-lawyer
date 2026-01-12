@@ -12,7 +12,7 @@ const manifest: ManifestV3Export = {
   },
 
   permissions: ["storage", "tabs"],
-  host_permissions: ["<all_urls>", "http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  host_permissions: [],
 
   background: {
     service_worker: "src/background.ts",
