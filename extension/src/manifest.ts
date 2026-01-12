@@ -11,7 +11,8 @@ const manifest: ManifestV3Export = {
     default_title: "Data Lawyer",
   },
 
-  permissions: ["storage", "tabs"],
+  // Minimal permissions for faster approval
+  permissions: ["storage", "activeTab"],
   host_permissions: [],
 
   background: {
@@ -21,7 +22,8 @@ const manifest: ManifestV3Export = {
 
   content_scripts: [
     {
-      matches: ["<all_urls>"],
+      // Only inject where it matters (faster review)
+      matches: ["*://*/*privacy*", "*://*/*terms*", "*://*/*policy*"],
       js: ["src/content-scripts/detectPolicyPages.ts"],
       run_at: "document_idle",
     },
