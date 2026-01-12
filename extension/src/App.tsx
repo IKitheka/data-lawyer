@@ -54,7 +54,8 @@ function badge(level?: string) {
   const c = riskColor(level);
   return {
     background: `linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02))`,
-    border: `1px solid ${UI.border}`,
+    border: `1px solid ${c}`,              // ✅ use c here
+    boxShadow: `0 0 0 3px rgba(255,255,255,0.06)`,
     color: UI.text,
     padding: "6px 10px",
     borderRadius: 999,
@@ -66,6 +67,7 @@ function badge(level?: string) {
     letterSpacing: 0.4,
   };
 }
+
 
 function pillDot(color: string) {
   return {
