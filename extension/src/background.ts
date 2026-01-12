@@ -1,4 +1,4 @@
-const API_BASE = "https://YOUR-CLOUD-RUN-URL";
+const API_BASE = "https://data-lawyer.onrender.com";
 const ANALYZE_URL = `${API_BASE}/policies/analyze`;
 
 // ---- helpers ----
