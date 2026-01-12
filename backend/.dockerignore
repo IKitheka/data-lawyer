@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+data_lawyer.db
+*.sqlite3
+*.sqlite3-journal
+dist/
+node_modules/
