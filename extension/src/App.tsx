@@ -15,16 +15,19 @@ type Stored = {
 
 type TabKey = "overview" | "flags" | "changes";
 
-function badgeStyle(level?: string) {
-  const l = (level || "").toUpperCase();
-  if (l.includes("HIGH"))
-    return { background: "#ffe5e5", border: "1px solid #ffb3b3", color: "#a40000" };
-  if (l.includes("MED"))
-    return { background: "#fff4db", border: "1px solid #ffd08a", color: "#7a4a00" };
-  if (l.includes("LOW"))
-    return { background: "#e9fff0", border: "1px solid #9de7b6", color: "#0f5a2a" };
-  return { background: "#eef2ff", border: "1px solid #c7d2fe", color: "#1e3a8a" };
-}
+const UI = {
+  bg: "#0b1220",
+  card: "#0f172a",
+  card2: "#0b1324",
+  border: "rgba(255,255,255,0.08)",
+  text: "#e5e7eb",
+  muted: "rgba(229,231,235,0.72)",
+  faint: "rgba(229,231,235,0.55)",
+  good: "#22c55e",
+  warn: "#f59e0b",
+  bad: "#ef4444",
+  blue: "#60a5fa",
+};
 
 function formatTime(iso?: string) {
   if (!iso) return "—";
@@ -39,18 +42,123 @@ function clip(s: string, n: number) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
-function tabButton(active: boolean) {
+function riskColor(level?: string) {
+  const l = (level || "").toUpperCase();
+  if (l.includes("HIGH")) return UI.bad;
+  if (l.includes("MED")) return UI.warn;
+  if (l.includes("LOW")) return UI.good;
+  return UI.blue;
+}
+
+function badge(level?: string) {
+  const c = riskColor(level);
+  return {
+    background: `linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02))`,
+    border: `1px solid ${UI.border}`,
+    color: UI.text,
+    padding: "6px 10px",
+    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 12,
+    fontWeight: 800 as const,
+    letterSpacing: 0.4,
+  };
+}
+
+function pillDot(color: string) {
+  return {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    background: color,
+    boxShadow: `0 0 0 3px rgba(255,255,255,0.06)`,
+  };
+}
+
+function tabStyle(active: boolean) {
   return {
     flex: 1,
-    padding: "10px 8px",
+    padding: "10px 10px",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    background: active ? "#111827" : "white",
-    color: active ? "white" : "#111",
+    border: `1px solid ${UI.border}`,
+    background: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)",
+    color: active ? UI.text : UI.muted,
     fontSize: 12,
     cursor: "pointer",
-    fontWeight: 700 as const,
+    fontWeight: 800 as const,
+    transition: "all 120ms ease",
   };
+}
+
+function buttonPrimary(disabled?: boolean) {
+  return {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: `1px solid ${UI.border}`,
+    background: disabled
+      ? "rgba(255,255,255,0.06)"
+      : "linear-gradient(180deg, rgba(96,165,250,0.40), rgba(96,165,250,0.18))",
+    color: disabled ? UI.faint : UI.text,
+    fontSize: 12,
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontWeight: 900 as const,
+    letterSpacing: 0.2,
+  };
+}
+
+function buttonGhost(disabled?: boolean) {
+  return {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: `1px solid ${UI.border}`,
+    background: "rgba(255,255,255,0.04)",
+    color: disabled ? UI.faint : UI.text,
+    fontSize: 12,
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontWeight: 800 as const,
+  };
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, color: UI.muted }}>
+      <div>{label}</div>
+      <div style={{ color: UI.text, fontWeight: 800, textAlign: "right" }}>{value}</div>
+    </div>
+  );
+}
+
+function ScoreMeter({ score, level }: { score?: number; level?: string }) {
+  const s = typeof score === "number" ? Math.max(0, Math.min(100, score)) : 0;
+  const c = riskColor(level);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: UI.muted }}>
+        <span>Score</span>
+        <span style={{ color: UI.text, fontWeight: 900 }}>{typeof score === "number" ? score : "—"}</span>
+      </div>
+      <div
+        style={{
+          marginTop: 8,
+          height: 10,
+          borderRadius: 999,
+          background: "rgba(255,255,255,0.06)",
+          border: `1px solid ${UI.border}`,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${s}%`,
+            height: "100%",
+            background: `linear-gradient(90deg, ${c}, rgba(255,255,255,0.10))`,
+          }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -72,25 +180,17 @@ export default function App() {
     }
   }, [analysis?.url]);
 
-  const changedBanner = Boolean(
-    (analysis as any)?.changed_since_last || (analysis as any)?.policy_changed
-  );
+  const changedBanner = Boolean((analysis as any)?.changed_since_last || (analysis as any)?.policy_changed);
 
   useEffect(() => {
-    chrome.storage.local.get(
-      ["latestAnalysis", "changeLog", "policySnapshots"],
-      (res: Stored) => {
-        setAnalysis(res.latestAnalysis ?? null);
-        setChangeLog(res.changeLog ?? []);
-        setSnapshotsCount(res.policySnapshots ? Object.keys(res.policySnapshots).length : 0);
-        setLoading(false);
-      }
-    );
+    chrome.storage.local.get(["latestAnalysis", "changeLog", "policySnapshots"], (res: Stored) => {
+      setAnalysis(res.latestAnalysis ?? null);
+      setChangeLog(res.changeLog ?? []);
+      setSnapshotsCount(res.policySnapshots ? Object.keys(res.policySnapshots).length : 0);
+      setLoading(false);
+    });
 
-    const onChanged: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
-      changes,
-      area
-    ) => {
+    const onChanged: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, area) => {
       if (area !== "local") return;
 
       if (changes.latestAnalysis?.newValue) {
@@ -119,7 +219,7 @@ export default function App() {
     if (analysis.summary) lines.push(`Summary: ${analysis.summary}`);
     if (analysis.red_flags?.length) {
       lines.push("Red Flags:");
-      for (const f of analysis.red_flags.slice(0, 8)) lines.push(`- ${f}`);
+      for (const f of analysis.red_flags.slice(0, 10)) lines.push(`- ${f}`);
     }
     if (analysis.url) lines.push(`URL: ${analysis.url}`);
 
@@ -142,46 +242,37 @@ export default function App() {
     });
   }
 
-  async function openPolicy() {
+  function openPolicy() {
     if (!analysis?.url) return;
     chrome.tabs.create({ url: analysis.url });
   }
 
-  // ✅ Final working "Analyze now":
-  // - DOES NOT use chrome.scripting at all (fixes executeScript undefined error)
-  // - Sends FORCE_ANALYZE to the already-registered content script
+  // ✅ No chrome.scripting here (avoids executeScript undefined errors).
+  // We just message the already-injected content script.
   async function analyzeNow() {
     setBusy(true);
     setError(null);
 
     try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) {
+      const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!t?.id) {
         setError("No active tab found.");
         setBusy(false);
         return;
       }
 
-      chrome.tabs.sendMessage(activeTab.id, { type: "FORCE_ANALYZE" }, (resp) => {
+      chrome.tabs.sendMessage(t.id, { type: "FORCE_ANALYZE" }, (resp) => {
         const lastErr = chrome.runtime.lastError;
-
         if (lastErr) {
-          // Most common: the tab wasn't reloaded after installing the extension,
-          // or the page is a Chrome internal page (chrome://), or restricted page.
-          setError(
-            "Could not reach content script. Reload the page (Ctrl+R) and try again. " +
-              "Also note: extensions can’t run on chrome:// pages."
-          );
+          setError("Could not reach the page script. Reload the page once, then try again.");
           setBusy(false);
           return;
         }
-
         if (!resp?.ok) {
           setError(resp?.error || "Analyze failed.");
           setBusy(false);
           return;
         }
-
         setBusy(false);
       });
     } catch (e: any) {
@@ -190,147 +281,116 @@ export default function App() {
     }
   }
 
+  const level = analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA";
+  const levelDot = riskColor(level);
+
   return (
     <div
       style={{
-        width: 380,
+        width: 390,
         padding: 14,
+        background: `radial-gradient(1000px 260px at 40% 0%, rgba(96,165,250,0.25), transparent 60%),
+                     radial-gradient(900px 260px at 90% 0%, rgba(239,68,68,0.18), transparent 60%),
+                     ${UI.bg}`,
+        color: UI.text,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 10,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: 0.2 }}>
-            Data Lawyer
-          </div>
-          <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 950, letterSpacing: 0.3 }}>Data Lawyer</div>
+          <div style={{ marginTop: 4, fontSize: 12, color: UI.muted }}>
             {loading
               ? "Loading…"
               : (analysis as any)?.saved_at
               ? `Last analyzed: ${formatTime((analysis as any).saved_at)}`
               : "Last analyzed: —"}
           </div>
-          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
-            Snapshots tracked: <b>{snapshotsCount}</b>
+          <div style={{ marginTop: 4, fontSize: 11, color: UI.faint }}>
+            Snapshots tracked: <span style={{ color: UI.text, fontWeight: 900 }}>{snapshotsCount}</span>
           </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-          <div
-            style={{
-              fontSize: 12,
-              padding: "6px 10px",
-              borderRadius: 999,
-              ...badgeStyle(analysis?.risk_level),
-            }}
-          >
-            {analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA"}
+          <div style={badge(level)}>
+            <span style={pillDot(levelDot)} />
+            {level}
           </div>
 
-          <button
-            onClick={analyzeNow}
-            disabled={busy}
-            style={{
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: "1px solid #e5e7eb",
-              background: busy ? "#f3f4f6" : "white",
-              color: "#111",
-              fontSize: 12,
-              cursor: busy ? "not-allowed" : "pointer",
-              fontWeight: 700,
-            }}
-            title="Force analysis of the current page"
-          >
+          <button onClick={analyzeNow} disabled={busy} style={buttonPrimary(busy)} title="Analyze the current page">
             {busy ? "Analyzing…" : "Analyze now"}
           </button>
         </div>
       </div>
 
+      {/* Change banner */}
       {changedBanner ? (
         <div
           style={{
-            marginTop: 10,
-            fontSize: 12,
+            marginTop: 12,
+            borderRadius: 14,
+            border: `1px solid rgba(239,68,68,0.35)`,
+            background: "linear-gradient(180deg, rgba(239,68,68,0.15), rgba(239,68,68,0.06))",
             padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid #fecaca",
-            background: "#fff1f2",
-            color: "#991b1b",
-            fontWeight: 650,
+            fontSize: 12,
+            fontWeight: 850,
           }}
         >
-          ⚠️ Policy changed since last time you analyzed it.
+          ⚠️ This policy changed since the last time you analyzed it.
         </div>
       ) : null}
 
       {/* Main card */}
       <div style={{ height: 12 }} />
-
       <div
         style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 14,
+          border: `1px solid ${UI.border}`,
+          borderRadius: 16,
           padding: 12,
-          background: "white",
+          background: `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))`,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
         }}
       >
         {loading ? (
-          <div style={{ fontSize: 13, color: "#444" }}>Loading latest analysis…</div>
+          <div style={{ fontSize: 13, color: UI.muted }}>Loading latest analysis…</div>
         ) : !analysis ? (
           <>
-            <div style={{ fontSize: 13, color: "#111", fontWeight: 750 }}>No analysis yet</div>
-            <div style={{ fontSize: 12, color: "#444", marginTop: 6, lineHeight: 1.45 }}>
+            <div style={{ fontSize: 13, fontWeight: 950 }}>No analysis yet</div>
+            <div style={{ marginTop: 8, fontSize: 12, color: UI.muted, lineHeight: 1.5 }}>
               Open a privacy/terms page, then click <b>Analyze now</b>.
             </div>
           </>
         ) : (
           <>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 13, color: "#111", fontWeight: 800 }}>
+            {/* Title / URL */}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 950 }}>
                   {analysis.service_name || domain || "Website"}
                 </div>
                 {analysis.url ? (
-                  <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>
-                    {clip(analysis.url, 58)}
+                  <div style={{ marginTop: 4, fontSize: 12, color: UI.muted }}>
+                    {clip(analysis.url, 64)}
                   </div>
                 ) : null}
               </div>
-
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "#6b7280" }}>Score</div>
-                <div style={{ fontSize: 18, fontWeight: 900, color: "#111" }}>
-                  {typeof analysis.risk_score === "number" ? analysis.risk_score : "—"}
-                </div>
-              </div>
             </div>
 
-            {/* Tabs */}
+            {/* Score meter */}
+            <ScoreMeter score={analysis.risk_score} level={analysis.risk_level} />
+
             <div style={{ height: 12 }} />
+
+            {/* Tabs */}
             <div style={{ display: "flex", gap: 8 }}>
-              <button style={tabButton(tab === "overview")} onClick={() => setTab("overview")}>
+              <button style={tabStyle(tab === "overview")} onClick={() => setTab("overview")}>
                 Overview
               </button>
-              <button style={tabButton(tab === "flags")} onClick={() => setTab("flags")}>
+              <button style={tabStyle(tab === "flags")} onClick={() => setTab("flags")}>
                 Red flags
               </button>
-              <button style={tabButton(tab === "changes")} onClick={() => setTab("changes")}>
+              <button style={tabStyle(tab === "changes")} onClick={() => setTab("changes")}>
                 Changes
               </button>
             </div>
@@ -338,94 +398,96 @@ export default function App() {
             <div style={{ height: 12 }} />
 
             {/* Tab content */}
-            {tab === "overview" ? (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#111" }}>Summary</div>
-                <div style={{ fontSize: 12, color: "#333", lineHeight: 1.5, marginTop: 6 }}>
-                  {analysis.summary || "No summary available yet."}
-                </div>
-
-                <div style={{ height: 10 }} />
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 11, color: "#6b7280" }}>
-                    Jurisdiction:{" "}
-                    <b style={{ color: "#111" }}>{analysis.jurisdiction || "UNKNOWN"}</b>
+            <div
+              style={{
+                borderRadius: 14,
+                border: `1px solid ${UI.border}`,
+                background: "rgba(0,0,0,0.18)",
+                padding: 12,
+              }}
+            >
+              {tab === "overview" ? (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 950 }}>Summary</div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: UI.text, lineHeight: 1.55 }}>
+                    {analysis.summary || "No summary available yet."}
                   </div>
-                  {(analysis as any)?.llm_model ? (
-                    <div style={{ fontSize: 11, color: "#6b7280" }}>
-                      Model: <b style={{ color: "#111" }}>{String((analysis as any).llm_model)}</b>
+
+                  <div style={{ height: 10 }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <InfoRow label="Jurisdiction" value={analysis.jurisdiction || "UNKNOWN"} />
+                    {(analysis as any)?.llm_model ? (
+                      <InfoRow label="LLM model" value={String((analysis as any).llm_model)} />
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+
+              {tab === "flags" ? (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 950 }}>Top red flags</div>
+                  {analysis.red_flags?.length ? (
+                    <ul style={{ margin: "10px 0 0 18px", padding: 0, fontSize: 12, color: UI.text, lineHeight: 1.55 }}>
+                      {analysis.red_flags.slice(0, 12).map((f, i) => (
+                        <li key={i} style={{ marginBottom: 8, color: UI.text }}>
+                          <span style={{ color: UI.muted }}>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div style={{ marginTop: 10, fontSize: 12, color: UI.muted }}>No red flags detected.</div>
+                  )}
+                </>
+              ) : null}
+
+              {tab === "changes" ? (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 950 }}>Recent change history</div>
+                  {changeLog?.length ? (
+                    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                      {changeLog.slice(0, 6).map((c, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            border: `1px solid ${UI.border}`,
+                            borderRadius: 14,
+                            padding: 10,
+                            background: "rgba(255,255,255,0.04)",
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 950 }}>
+                            {c.title || (c.url ? new URL(c.url).hostname : "Policy")}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: UI.muted }}>
+                            Changed at: <span style={{ color: UI.text, fontWeight: 900 }}>{formatTime(c.changed_at)}</span>
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: UI.muted }}>{c.url ? clip(c.url, 62) : ""}</div>
+                        </div>
+                      ))}
                     </div>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
+                  ) : (
+                    <div style={{ marginTop: 10, fontSize: 12, color: UI.muted }}>
+                      No changes recorded yet. When a policy changes, it will appear here.
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
 
-            {tab === "flags" ? (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#111" }}>Top red flags</div>
-                {analysis.red_flags?.length ? (
-                  <ul
-                    style={{
-                      margin: "8px 0 0 18px",
-                      padding: 0,
-                      fontSize: 12,
-                      color: "#333",
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    {analysis.red_flags.slice(0, 12).map((f, i) => (
-                      <li key={i} style={{ marginBottom: 6 }}>
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div style={{ fontSize: 12, color: "#444", marginTop: 8 }}>
-                    No red flags detected.
-                  </div>
-                )}
-              </>
-            ) : null}
-
-            {tab === "changes" ? (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "#111" }}>Recent change history</div>
-
-                {changeLog?.length ? (
-                  <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-                    {changeLog.slice(0, 6).map((c, idx) => (
-                      <div
-                        key={idx}
-                        style={{
-                          border: "1px solid #e5e7eb",
-                          borderRadius: 12,
-                          padding: 10,
-                          background: "#fafafa",
-                        }}
-                      >
-                        <div style={{ fontSize: 12, fontWeight: 800, color: "#111" }}>
-                          {c.title || (c.url ? new URL(c.url).hostname : "Policy")}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                          Changed at: <b style={{ color: "#111" }}>{formatTime(c.changed_at)}</b>
-                        </div>
-                        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                          {c.url ? clip(c.url, 60) : ""}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: "#444", marginTop: 8 }}>
-                    No changes recorded yet. When a policy changes, it will appear here.
-                  </div>
-                )}
-              </>
-            ) : null}
-
-            {/* Errors */}
+            {/* Error */}
             {error ? (
-              <div style={{ marginTop: 10, fontSize: 12, color: "#b91c1c", fontWeight: 650 }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  borderRadius: 14,
+                  border: `1px solid rgba(239,68,68,0.35)`,
+                  background: "rgba(239,68,68,0.10)",
+                  padding: "10px 12px",
+                  fontSize: 12,
+                  color: UI.text,
+                  fontWeight: 800,
+                }}
+              >
                 {error}
               </div>
             ) : null}
@@ -433,53 +495,15 @@ export default function App() {
             {/* Actions */}
             <div style={{ height: 12 }} />
             <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={copySummary}
-                style={{
-                  flex: 1,
-                  padding: "10px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #e5e7eb",
-                  background: "#111827",
-                  color: "white",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 800,
-                }}
-              >
+              <button onClick={copySummary} style={{ ...buttonPrimary(false), flex: 1 }}>
                 Copy summary
               </button>
 
-              <button
-                onClick={openPolicy}
-                disabled={!analysis.url}
-                style={{
-                  padding: "10px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #e5e7eb",
-                  background: "white",
-                  color: "#111",
-                  fontSize: 12,
-                  cursor: analysis.url ? "pointer" : "not-allowed",
-                  fontWeight: 800,
-                }}
-              >
+              <button onClick={openPolicy} disabled={!analysis.url} style={buttonGhost(!analysis.url)}>
                 Open
               </button>
 
-              <button
-                onClick={clear}
-                style={{
-                  padding: "10px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #e5e7eb",
-                  background: "white",
-                  color: "#111",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontWeight: 800,
-                }}
-              >
+              <button onClick={clear} style={buttonGhost(false)}>
                 Clear
               </button>
             </div>
@@ -488,8 +512,8 @@ export default function App() {
       </div>
 
       <div style={{ height: 10 }} />
-      <div style={{ fontSize: 11, color: "#6b7280" }}>
-        Tip: keep backend running on <b>127.0.0.1:8000</b>.
+      <div style={{ fontSize: 11, color: UI.faint }}>
+        Tip: keep backend running on <b style={{ color: UI.text }}>127.0.0.1:8000</b>.
       </div>
     </div>
   );
