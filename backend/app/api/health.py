@@ -1,5 +1,3 @@
-# backend/app/api/health.py
-import os
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
@@ -15,16 +13,8 @@ def get_db():
         db.close()
 
 @router.get("")
-def health(db: Session = Depends(get_db)):
-    # DB ping (fast + reliable)
-    db.execute("SELECT 1")
-
-    return {
-        "status": "ok",
-        "db": "ok",
-        "llm_enabled": os.getenv("LLM_ENABLED", "true").lower() == "true",
-        "gemini_key_set": bool(os.getenv("GEMINI_API_KEY")),
-    }
+def health_root():
+    return {"ok": True, "service": "data-lawyer-api"}
 
 @router.get("/score")
 def health_score(db: Session = Depends(get_db)):
