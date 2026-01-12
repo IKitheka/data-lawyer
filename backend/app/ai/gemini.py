@@ -1,3 +1,4 @@
+# backend/app/ai/gemini.py
 import os
 import json
 import time
@@ -8,10 +9,17 @@ PRIMARY_MODEL = "models/gemini-2.5-flash"
 FALLBACK_MODEL = "models/gemini-2.0-flash-lite"
 
 def analyze_with_gemini(cleaned_text: str, url: str, domain: str) -> dict:
+    # Load .env locally (safe on dev). On Render, env vars are set in dashboard.
     load_dotenv()
+
+    llm_enabled = os.getenv("LLM_ENABLED", "true").lower() == "true"
+    if not llm_enabled:
+        return {}
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set. Put it in backend/.env")
+        # Don’t crash production — just skip LLM
+        return {}
 
     client = genai.Client(api_key=api_key)
 
@@ -37,28 +45,30 @@ Policy text:
 IMPORTANT:
 - Output MUST be valid JSON only.
 - No markdown, no backticks, no extra words.
-"""
+""".strip()
 
-    def call_model(model_name: str):
+    def call_model(model_name: str) -> dict:
+        # NOTE: google-genai python SDK doesn’t expose a clean timeout param everywhere.
+        # Keep prompt short and rely on your route-level timeouts in prod server.
         resp = client.models.generate_content(model=model_name, contents=prompt)
-        return (resp.text or "").strip()
+        raw = (resp.text or "").strip()
+        data = _parse_json_strict(raw)
+        return _normalize_llm(data, model_used=model_name)
 
-    # Retry strategy: try primary model twice, then fallback once
+    # Retry: primary twice, fallback once
     last_err = None
     for attempt in range(2):
         try:
-            raw = call_model(PRIMARY_MODEL)
-            data = _parse_json_strict(raw)
-            return _normalize_llm(data, model_used=PRIMARY_MODEL)
+            return call_model(PRIMARY_MODEL)
         except Exception as e:
             last_err = e
-            time.sleep(0.6 * (attempt + 1))  # small backoff
+            time.sleep(0.6 * (attempt + 1))
 
-    # fallback model
-    raw = call_model(FALLBACK_MODEL)
-    data = _parse_json_strict(raw)
-    return _normalize_llm(data, model_used=FALLBACK_MODEL)
-
+    try:
+        return call_model(FALLBACK_MODEL)
+    except Exception:
+        # Final safety: never raise here
+        return {}
 
 def _parse_json_strict(raw: str) -> dict:
     try:
@@ -67,12 +77,12 @@ def _parse_json_strict(raw: str) -> dict:
         start = raw.find("{")
         end = raw.rfind("}")
         if start != -1 and end != -1 and end > start:
-            return json.loads(raw[start:end+1])
+            return json.loads(raw[start:end + 1])
         raise RuntimeError(f"Gemini returned non-JSON output: {raw[:300]}")
-
 
 def _normalize_llm(data: dict, model_used: str) -> dict:
     summary = str(data.get("summary", "")).strip()
+
     red_flags = data.get("red_flags", [])
     if not isinstance(red_flags, list):
         red_flags = []

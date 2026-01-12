@@ -1,3 +1,5 @@
+# backend/app/api/health.py
+import os
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
@@ -12,6 +14,18 @@ def get_db():
     finally:
         db.close()
 
+@router.get("")
+def health(db: Session = Depends(get_db)):
+    # DB ping (fast + reliable)
+    db.execute("SELECT 1")
+
+    return {
+        "status": "ok",
+        "db": "ok",
+        "llm_enabled": os.getenv("LLM_ENABLED", "true").lower() == "true",
+        "gemini_key_set": bool(os.getenv("GEMINI_API_KEY")),
+    }
+
 @router.get("/score")
 def health_score(db: Session = Depends(get_db)):
     rows = db.query(PolicyAnalysis).order_by(PolicyAnalysis.created_at.desc()).limit(200).all()
@@ -23,7 +37,6 @@ def health_score(db: Session = Depends(get_db)):
     low = sum(1 for r in rows if r.risk_level == "LOW")
     total = len(rows)
 
-    # Simple health score: penalize high & medium
     score = 100 - (high * 15 + med * 5)
     score = max(0, min(100, score))
 
