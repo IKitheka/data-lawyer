@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import response 
 
 from app.db.init_db import init_db
 from app.api import policies, requests, health
@@ -15,7 +16,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-init_db()
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 app.include_router(policies.router, prefix="/policies", tags=["policies"])
 app.include_router(requests.router, prefix="/requests", tags=["requests"])
@@ -24,3 +27,7 @@ app.include_router(health.router, prefix="/health", tags=["health"])
 @app.get("/")
 def root():
     return {"message": "Data Lawyer API running"}
+
+@app.head("/")
+def root_head():
+    return Response(status_code=200)

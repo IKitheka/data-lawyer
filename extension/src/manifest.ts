@@ -12,8 +12,8 @@ const manifest: ManifestV3Export = {
   },
 
   // Minimal permissions for faster approval
-  permissions: ["storage", "activeTab"],
-  host_permissions: [],
+  permissions: ["storage","tabs","activeTab"],
+  host_permissions: ["https://data-lawyer.onrender.com/*"],
 
   background: {
     service_worker: "src/background.ts",
