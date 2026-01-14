@@ -8,6 +8,7 @@ from slowapi.extension import _rate_limit_exceeded_handler
 
 from app.db.init_db import init_db
 from app.api import policies, requests, health
+from app.core.limiter import limiter
 
 def get_ip(request: Request) -> str:
     # Render/Cloudflare/proxies: prefer forwarded header
