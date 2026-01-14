@@ -4,8 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Request
+
 
 from app.db.session import SessionLocal
 from app.db.models import PolicyAnalysis
@@ -74,9 +75,9 @@ def _latest_llm_call_time_for_domain(db: Session, domain: str):
 
 
 @router.post("/analyze", response_model=PolicyAnalysisOut)
-@limiter.limit("10/minute")          # per IP
-@limiter.limit("200/day")            # per IP daily cap
-def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")          # per IP
+@limiter.limit("1000/day")            # per IP daily cap
+def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     url = (payload.url or "").strip()
     domain = urlparse(url).netloc or "unknown"
     service_name = payload.service_name or domain
