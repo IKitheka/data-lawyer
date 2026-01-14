@@ -10,7 +10,7 @@ class PolicyAnalysisOut(BaseModel):
     id: int
     url: str
     domain: str
-    service_name: str
+    service_name: str | None = None
     risk_level: str
     risk_score: float
     summary: str
@@ -19,7 +19,10 @@ class PolicyAnalysisOut(BaseModel):
     reasoning: dict[str, Any]
     extracted: dict[str, Any]
     policy_changed: bool
-    llm_used: bool = False
+    llm_model: str | None = None
+    llm_used: str | None = None
+    model: str | None = None
+
 
 
     class Config:
