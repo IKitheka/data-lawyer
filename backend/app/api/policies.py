@@ -1,7 +1,8 @@
+# app/api/policies.py
 import json
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -26,13 +27,39 @@ def get_db():
 @router.post("/analyze", response_model=PolicyAnalysisOut)
 def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     url = (payload.url or "").strip()
-    domain = urlparse(url).netloc or "unknown"
-    service_name = payload.service_name or domain
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
 
+    domain = urlparse(url).netloc or "unknown"
+    service_name = (payload.service_name or domain).strip() or domain
+
+    # Normalize + protect backend from huge pages
     cleaned = normalize_text(payload.text or "")
+    cleaned = cleaned[:200000]  # hard cap to protect DB + LLM
+
+    if len(cleaned) < 200:
+        # Not enough content to analyze
+        return PolicyAnalysisOut(
+            id=0,
+            url=url,
+            domain=domain,
+            service_name=service_name,
+            risk_level="UNKNOWN",
+            risk_score=0.0,
+            summary="Not enough text to analyze.",
+            jurisdiction="UNKNOWN",
+            red_flags=[],
+            reasoning={},
+            extracted={},
+            policy_changed=False,
+            llm_model=None,
+            llm_used=None,
+            model=None,
+        )
+
     h = policy_hash(cleaned)
 
-    # last analysis for this domain (to detect change)
+    # Detect change (compare with latest stored policy hash for this domain)
     latest = (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.domain == domain)
@@ -41,16 +68,16 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     )
     policy_changed = bool(latest and latest.policy_hash != h)
 
-    # 1) Rule-based baseline
-    analysis = analyze_with_rules(cleaned)
+    # 1) Rule-based baseline analysis
+    analysis = analyze_with_rules(cleaned) or {}
 
-    # ---- defaults to avoid UnboundLocalError ----
+    # Defaults (avoid UnboundLocalError)
     llm_used = False
     llm_cached = False
     llm = {}
     llm_model = None
 
-    # 2) LLM cache lookup: domain + policy_hash
+    # 2) Cache lookup (domain + policy_hash + has llm fields)
     cached = (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.domain == domain)
@@ -61,29 +88,34 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     )
 
     if cached:
-        llm = {
-            "summary": cached.llm_summary,
-            "red_flags": json.loads(cached.llm_red_flags_json or "[]"),
-            "risk_level": cached.llm_risk_level,
-            "model": cached.llm_model,
-        }
-        llm_cached = True
-        llm_model = cached.llm_model
-        print("[LLM] Cache HIT for", domain)
+        try:
+            llm = {
+                "summary": cached.llm_summary,
+                "red_flags": json.loads(cached.llm_red_flags_json or "[]"),
+                "risk_level": cached.llm_risk_level,
+                "model": cached.llm_model,
+            }
+            llm_cached = True
+            llm_model = cached.llm_model
+            print("[LLM] Cache HIT for", domain)
+        except Exception as e:
+            print("[LLM] Cache read failed; continuing without cache:", repr(e))
+            llm = {}
+            llm_cached = False
     else:
         print("[LLM] Cache MISS for", domain)
 
-    # 3) Gemini LLM enhancement (only on cache miss)
+    # 3) Gemini enhancement (only when cache miss)
     try:
         if not llm_cached:
-            llm = analyze_with_gemini(cleaned, url=url, domain=domain)
+            llm = analyze_with_gemini(cleaned, url=url, domain=domain) or {}
             llm_used = True
             llm_model = llm.get("model")
             print("[LLM] Gemini OK. Keys:", list(llm.keys()))
         else:
             print("[LLM] Using cached Gemini output.")
 
-        # Apply LLM enhancements (if any) to the response analysis
+        # Apply LLM enhancements to baseline analysis
         if isinstance(llm.get("summary"), str) and llm["summary"].strip():
             analysis["summary"] = llm["summary"].strip()
 
@@ -100,38 +132,43 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
                 analysis["risk_level"] = rl
 
     except Exception as e:
+        # Never crash endpoint if Gemini fails
         print("[LLM] Gemini failed, using rules only:", repr(e))
 
     llm_available = llm_used or llm_cached
 
     # 4) Persist to DB
-    row = PolicyAnalysis(
-        url=url,
-        domain=domain,
-        service_name=service_name,
-        policy_hash=h,
-        raw_text=cleaned[:200000],  # keep DB sane
+    try:
+        row = PolicyAnalysis(
+            url=url,
+            domain=domain,
+            service_name=service_name,
+            policy_hash=h,
+            raw_text=cleaned,  # already capped above
 
-        summary=analysis.get("summary", ""),
-        risk_level=analysis.get("risk_level", "UNKNOWN"),
-        risk_score=float(analysis.get("risk_score", 0.0)),
-        jurisdiction=analysis.get("jurisdiction", "UNKNOWN"),
+            summary=str(analysis.get("summary", "") or ""),
+            risk_level=str(analysis.get("risk_level", "UNKNOWN") or "UNKNOWN"),
+            risk_score=float(analysis.get("risk_score", 0.0) or 0.0),
+            jurisdiction=str(analysis.get("jurisdiction", "UNKNOWN") or "UNKNOWN"),
 
-        red_flags_json=json.dumps(analysis.get("red_flags", [])),
-        reasoning_json=json.dumps(analysis.get("reasoning", {})),
-        extracted_json=json.dumps(analysis.get("extracted", {})),
+            red_flags_json=json.dumps(analysis.get("red_flags", []) or []),
+            reasoning_json=json.dumps(analysis.get("reasoning", {}) or {}),
+            extracted_json=json.dumps(analysis.get("extracted", {}) or {}),
 
-        llm_summary=(llm.get("summary") if llm_available else None),
-        llm_red_flags_json=(json.dumps(llm.get("red_flags", [])) if llm_available else None),
-        llm_risk_level=(llm.get("risk_level") if llm_available else None),
-        llm_model=(llm_model if llm_available else None),
-    )
+            llm_summary=(llm.get("summary") if llm_available else None),
+            llm_red_flags_json=(json.dumps(llm.get("red_flags", [])) if llm_available else None),
+            llm_risk_level=(llm.get("risk_level") if llm_available else None),
+            llm_model=(llm_model if llm_available else None),
+        )
 
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB write failed: {e}")
 
-    # 5) Return API response
+    # 5) Return response
     return PolicyAnalysisOut(
         id=row.id,
         url=row.url,
@@ -141,10 +178,13 @@ def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
         risk_score=row.risk_score,
         summary=row.summary,
         jurisdiction=row.jurisdiction,
-        red_flags=json.loads(row.red_flags_json),
-        reasoning=json.loads(row.reasoning_json),
-        extracted=json.loads(row.extracted_json),
+        red_flags=json.loads(row.red_flags_json or "[]"),
+        reasoning=json.loads(row.reasoning_json or "{}"),
+        extracted=json.loads(row.extracted_json or "{}"),
         policy_changed=policy_changed,
+        llm_model=row.llm_model,
+        llm_used=("cache" if llm_cached else ("gemini" if llm_used else None)),
+        model=(llm_model if llm_available else None),
     )
 
 
@@ -158,7 +198,7 @@ def latest_analyses(db: Session = Depends(get_db)):
             "service_name": r.service_name,
             "risk_level": r.risk_level,
             "risk_score": r.risk_score,
-            "created_at": r.created_at.isoformat(),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in rows
     ]
@@ -168,7 +208,7 @@ def latest_analyses(db: Session = Depends(get_db)):
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
     r = db.query(PolicyAnalysis).filter(PolicyAnalysis.id == analysis_id).first()
     if not r:
-        return {"error": "Not found"}
+        raise HTTPException(status_code=404, detail="Not found")
 
     return {
         "id": r.id,
@@ -179,8 +219,8 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
         "risk_level": r.risk_level,
         "risk_score": r.risk_score,
         "jurisdiction": r.jurisdiction,
-        "red_flags": json.loads(r.red_flags_json),
-        "reasoning": json.loads(r.reasoning_json),
-        "extracted": json.loads(r.extracted_json),
-        "created_at": r.created_at.isoformat(),
+        "red_flags": json.loads(r.red_flags_json or "[]"),
+        "reasoning": json.loads(r.reasoning_json or "{}"),
+        "extracted": json.loads(r.extracted_json or "{}"),
+        "created_at": r.created_at.isoformat() if r.created_at else None,
     }

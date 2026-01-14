@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.db.session import SessionLocal
 from app.db.models import PolicyAnalysis
 
 router = APIRouter()
+
 
 def get_db():
     db = SessionLocal()
@@ -12,9 +16,25 @@ def get_db():
     finally:
         db.close()
 
+
 @router.get("")
-def health_root():
+def health():
+    # liveness: process is running
     return {"ok": True, "service": "data-lawyer-api"}
+
+
+@router.get("/ready")
+def readiness(db: Session = Depends(get_db)):
+    """
+    readiness: fail if DB is down
+    Render / load balancers use this concept.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+        return {"ok": True, "db": "ok"}
+    except SQLAlchemyError as e:
+        return {"ok": False, "db": "down", "error": str(e)}
+
 
 @router.get("/score")
 def health_score(db: Session = Depends(get_db)):
