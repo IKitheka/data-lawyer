@@ -14,6 +14,7 @@ from app.ai.text_cleaner import normalize_text
 from app.ai.hash_utils import policy_hash
 from app.ai.policy_rules import analyze_with_rules
 from app.ai.gemini import analyze_with_gemini
+from app.main import limiter
 
 router = APIRouter()
 
@@ -73,6 +74,8 @@ def _latest_llm_call_time_for_domain(db: Session, domain: str):
 
 
 @router.post("/analyze", response_model=PolicyAnalysisOut)
+@limiter.limit("10/minute")          # per IP
+@limiter.limit("200/day")            # per IP daily cap
 def analyze_policy(payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     url = (payload.url or "").strip()
     domain = urlparse(url).netloc or "unknown"
