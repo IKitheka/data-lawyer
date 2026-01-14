@@ -14,7 +14,7 @@ from app.ai.text_cleaner import normalize_text
 from app.ai.hash_utils import policy_hash
 from app.ai.policy_rules import analyze_with_rules
 from app.ai.gemini import analyze_with_gemini
-from app.main import limiter
+from app.core.limiter import limiter
 
 router = APIRouter()
 
