@@ -4,9 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, Request
-
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.models import PolicyAnalysis
@@ -39,12 +38,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _utcnow():
+def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _count_llm_calls_since(db: Session, since_dt: datetime) -> int:
-    # Count rows where we actually stored an LLM summary (means LLM ran successfully)
     return (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.created_at >= since_dt)
@@ -75,9 +73,15 @@ def _latest_llm_call_time_for_domain(db: Session, domain: str):
 
 
 @router.post("/analyze", response_model=PolicyAnalysisOut)
-@limiter.limit("60/minute")          # per IP
-@limiter.limit("1000/day")            # per IP daily cap
+@limiter.limit("60/minute")   # per key_func (IP or user)
+@limiter.limit("1000/day")    # per key_func (IP or user)
 def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
+    # DEBUG: confirm proxy headers (remove later)
+    print("REMOTE:", request.client)
+    print("XFF:", request.headers.get("x-forwarded-for"))
+    print("CF-IP:", request.headers.get("cf-connecting-ip"))
+    print("REAL-IP:", request.headers.get("x-real-ip"))
+
     url = (payload.url or "").strip()
     domain = urlparse(url).netloc or "unknown"
     service_name = payload.service_name or domain
@@ -85,25 +89,27 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
     cleaned = normalize_text(payload.text or "")
     h = policy_hash(cleaned)
 
-    # latest analysis for this domain (for change detection)
+    # latest analysis for this domain
     latest = (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.domain == domain)
         .order_by(PolicyAnalysis.created_at.desc())
         .first()
     )
-    policy_changed = bool(latest and latest.policy_hash != h)
+
+    # True if this domain has been seen before AND hash differs
+    policy_changed = (latest is not None) and (latest.policy_hash != h)
 
     # 1) Rule-based baseline (always)
     analysis = analyze_with_rules(cleaned)
 
-    # ---- defaults ----
-    llm_used = bool
-    llm_cached = False
-    llm = {}
-    llm_model = str | None
+    # defaults (REAL values, not types)
+    llm_used: bool = False
+    llm_cached: bool = False
+    llm: dict = {}
+    llm_model: str | None = None
 
-    # 2) LLM cache lookup: domain + policy_hash
+    # 2) Cache lookup: same domain + same hash where LLM result exists
     cached = (
         db.query(PolicyAnalysis)
         .filter(PolicyAnalysis.domain == domain)
@@ -126,9 +132,8 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
     else:
         print("[LLM] Cache MISS for", domain)
 
-    # 3) LLM LOCKDOWN GATEKEEPER
+    # 3) LLM lockdown gatekeeper
     llm_enabled = _env_bool("LLM_ENABLED", "true")
-
     cooldown_hours = _env_int("LLM_COOLDOWN_HOURS", 24)
     max_per_day = _env_int("LLM_MAX_CALLS_PER_DAY", 200)
     max_per_domain_per_day = _env_int("LLM_MAX_CALLS_PER_DOMAIN_PER_DAY", 10)
@@ -136,26 +141,20 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
     now = _utcnow()
     since_24h = now - timedelta(hours=24)
 
-    # ✅ Global quota
     global_used_24h = _count_llm_calls_since(db, since_24h)
     global_quota_ok = global_used_24h < max_per_day
 
-    # ✅ Domain quota
     domain_used_24h = _count_llm_calls_for_domain_since(db, domain, since_24h)
     domain_quota_ok = domain_used_24h < max_per_domain_per_day
 
-    # ✅ Cooldown
     last_llm_dt = _latest_llm_call_time_for_domain(db, domain)
     cooldown_ok = True
     if last_llm_dt:
-        # created_at might be naive depending on your DB model; assume UTC if naive
         if last_llm_dt.tzinfo is None:
             last_llm_dt = last_llm_dt.replace(tzinfo=timezone.utc)
         cooldown_ok = (now - last_llm_dt) >= timedelta(hours=cooldown_hours)
 
-    # ✅ Policy-change rule (only spend money if policy is new/changed or never seen)
-    # If you have a cached LLM result for same hash, never call LLM.
-    # If policy isn't changed, we generally do NOT call LLM (saves cost).
+    # Spend LLM calls only if new or changed policy for this domain
     policy_new_or_changed = (latest is None) or policy_changed
 
     should_call_llm = (
@@ -173,6 +172,8 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
             {
                 "enabled": llm_enabled,
                 "policy_new_or_changed": policy_new_or_changed,
+                "global_used_24h": global_used_24h,
+                "domain_used_24h": domain_used_24h,
                 "global_quota_ok": global_quota_ok,
                 "domain_quota_ok": domain_quota_ok,
                 "cooldown_ok": cooldown_ok,
@@ -189,7 +190,7 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
                 llm_model = llm.get("model")
                 print("[LLM] Gemini OK. Keys:", list(llm.keys()))
             else:
-                print("[LLM] Gemini skipped/disabled/no-key.")
+                print("[LLM] Gemini returned empty (disabled/no-key).")
         else:
             if llm_cached:
                 print("[LLM] Using cached Gemini output.")
@@ -200,7 +201,7 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
         llm = {}
 
     llm_available_for_response = llm_used or llm_cached
-    llm_should_persist = llm_used
+    llm_should_persist = llm_used  # only store when we actually called it this time
 
     # 5) Merge LLM enhancements (if any)
     if llm_available_for_response:
@@ -219,7 +220,7 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
             if rl in {"LOW", "MEDIUM", "HIGH"}:
                 analysis["risk_level"] = rl
 
-    # 6) Persist to DB
+    # 6) Persist
     row = PolicyAnalysis(
         url=url,
         domain=domain,
@@ -246,7 +247,7 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
     db.commit()
     db.refresh(row)
 
-    # 7) Return
+    # 7) Response
     out = PolicyAnalysisOut(
         id=row.id,
         url=row.url,
@@ -262,7 +263,7 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
         policy_changed=policy_changed,
     )
 
-    # optional fields (if your schema includes them)
+    # If your schema includes these fields, set them properly
     try:
         out.llm_used = llm_used
         out.llm_model = llm_model if llm_used else None
