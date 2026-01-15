@@ -98,10 +98,10 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
     analysis = analyze_with_rules(cleaned)
 
     # ---- defaults ----
-    llm_used = False
+    llm_used = bool
     llm_cached = False
     llm = {}
-    llm_model = None
+    llm_model = str | None
 
     # 2) LLM cache lookup: domain + policy_hash
     cached = (
@@ -199,10 +199,11 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
         print("[LLM] Gemini failed, using rules only:", repr(e))
         llm = {}
 
-    llm_available = llm_used or llm_cached
+    llm_available_for_response = llm_used or llm_cached
+    llm_should_persist = llm_used
 
     # 5) Merge LLM enhancements (if any)
-    if llm_available:
+    if llm_available_for_response:
         if isinstance(llm.get("summary"), str) and llm["summary"].strip():
             analysis["summary"] = llm["summary"].strip()
 
@@ -235,10 +236,10 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
         reasoning_json=json.dumps(analysis.get("reasoning", {})),
         extracted_json=json.dumps(analysis.get("extracted", {})),
 
-        llm_summary=(llm.get("summary") if llm_available else None),
-        llm_red_flags_json=(json.dumps(llm.get("red_flags", [])) if llm_available else None),
-        llm_risk_level=(llm.get("risk_level") if llm_available else None),
-        llm_model=(llm_model if llm_available else None),
+        llm_summary=(llm.get("summary") if llm_should_persist else None),
+        llm_red_flags_json=(json.dumps(llm.get("red_flags", [])) if llm_should_persist else None),
+        llm_risk_level=(llm.get("risk_level") if llm_should_persist else None),
+        llm_model=(llm_model if llm_should_persist else None),
     )
 
     db.add(row)
@@ -263,8 +264,8 @@ def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = 
 
     # optional fields (if your schema includes them)
     try:
-        out.llm_used = llm_model if llm_available else None
-        out.llm_model = llm_model if llm_available else None
+        out.llm_used = llm_used
+        out.llm_model = llm_model if llm_used else None
     except Exception:
         pass
 
