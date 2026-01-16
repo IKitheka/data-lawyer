@@ -74,7 +74,7 @@ def _latest_llm_call_time_for_domain(db: Session, domain: str):
 
 @router.post("/analyze", response_model=PolicyAnalysisOut)
 @limiter.limit("5/minute")   # per key_func (IP or user)
-@limiter.limit("1000/day")    # per key_func (IP or user)
+@limiter.limit("100/day")    # per key_func (IP or user)
 def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
     # DEBUG: confirm proxy headers (remove later)
     print("REMOTE:", request.client)
