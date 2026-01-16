@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import JSONResponse
+from redis.exceptions import AuthentificationError, ConnectionError as RedisConnectionError
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -32,6 +34,22 @@ app.include_router(policies.router, prefix="/policies", tags=["policies"])
 app.include_router(requests.router, prefix="/requests", tags=["requests"])
 app.include_router(health.router, prefix="/health", tags=["health"])
 
+@app.exception_handler(AuthenticationError)
+async def redis_auth_error_handler(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limiter storage (Redis) auth failed. Check REDIS_URL."},
+    )
+
+@app.exception_handler(RedisConnectionError)
+async def redis_conn_error_handler(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limiter storage (Redis) unreachable. Check REDIS_URL/network."},
+    )
+
 @app.get("/")
 def root():
     return {"message": "Data Lawyer API running"}
+
+
