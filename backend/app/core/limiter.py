@@ -1,9 +1,8 @@
-# backend/app/core/limiter.py
 import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-REDIS_URL = os.getenv("REDIS_URL", "").strip() or None
+REDIS_URL = (os.getenv("REDIS_URL") or "").strip() or None
 print("Rate limit storage:", "redis" if REDIS_URL else "memory")
 
 if REDIS_URL:
@@ -30,11 +29,8 @@ def _rate_limit_key(request):
 
     return get_remote_address(request)
 
-REDIS_URL = os.getenv("REDIS_URL", "").strip() or None
-
 limiter = Limiter(
     key_func=_rate_limit_key,
-    storage_uri=REDIS_URL,  # ✅ this is the correct arg
+    storage_uri=REDIS_URL,   # correct param for slowapi
     default_limits=[os.getenv("DEFAULT_RATE_LIMIT", "60/minute")],
 )
-
