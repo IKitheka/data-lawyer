@@ -3,6 +3,7 @@ import { analyzePolicy } from "./api/policies";
 
 const API_TIMEOUT_MS = 20000;
 
+// ---- helpers ----
 async function sha256(text: string): Promise<string> {
   const enc = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", enc);
@@ -18,6 +19,7 @@ function keyForUrl(url: string) {
 function withTimeout<T>(p: Promise<T>, timeoutMs: number) {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("Request timed out")), timeoutMs);
+
     p.then((v) => {
       clearTimeout(t);
       resolve(v);
@@ -28,6 +30,7 @@ function withTimeout<T>(p: Promise<T>, timeoutMs: number) {
   });
 }
 
+// ---- main listener ----
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "ANALYZE_POLICY") return;
 
@@ -54,6 +57,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const prev = policySnapshots[urlKey];
       const changed = !!prev && prev.last_hash !== newHash;
 
+      // 3) If changed, log an event
       if (changed && prev) {
         changeLog.unshift({
           url,
@@ -65,6 +69,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (changeLog.length > 30) changeLog.length = 30;
       }
 
+      // 4) Update snapshot for next time
       policySnapshots[urlKey] = {
         last_hash: newHash,
         last_seen: new Date().toISOString(),
@@ -72,7 +77,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         last_title: title,
       };
 
-      // 3) Call backend using your wrapper
+      // 5) Call backend (with timeout)
       const data = await withTimeout(
         analyzePolicy({
           url,
@@ -82,7 +87,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         API_TIMEOUT_MS
       );
 
-      // 4) Save latest analysis + change status for popup
+      // 6) Save latest analysis + change status for popup
       const latestAnalysis = {
         ...data,
         url,
