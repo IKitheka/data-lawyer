@@ -15,6 +15,7 @@ from app.ai.hash_utils import policy_hash
 from app.ai.policy_rules import analyze_with_rules
 from app.ai.gemini import analyze_with_gemini
 from app.core.limiter import limiter
+from app.core.auth import require_api_key
 
 router = APIRouter()
 
@@ -75,7 +76,7 @@ def _latest_llm_call_time_for_domain(db: Session, domain: str):
 @router.post("/analyze", response_model=PolicyAnalysisOut)
 @limiter.limit("5/minute")   # per key_func (IP or user)
 @limiter.limit("100/day")    # per key_func (IP or user)
-def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = Depends(get_db)):
+def analyze_policy(request: Request, payload: PolicyAnalyzeInput, db: Session = Depends(get_db),_=Depends(require_api_key)):
     # DEBUG: confirm proxy headers (remove later)
     print("REMOTE:", request.client)
     print("XFF:", request.headers.get("x-forwarded-for"))
