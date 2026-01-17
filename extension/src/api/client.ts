@@ -1,11 +1,14 @@
-const API_BASE = "http://127.0.0.1:8000";
+// src/api/client.ts
+import { getClientId } from "./clientId";
 
-export async function analyzePolicy(url: string, text: string) {
-  const res = await fetch(`${API_BASE}/policies/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, text }),
-  });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json();
+const API_BASE = "https://data-lawyer.onrender.com";
+
+export async function apiFetch(path: string, init: RequestInit = {}) {
+  const clientId = await getClientId(); // ✅ USED (fixes TS6133)
+
+  const headers = new Headers(init.headers || {});
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  headers.set("X-Client-Id", clientId);
+
+  return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
