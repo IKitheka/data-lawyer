@@ -1,17 +1,19 @@
+# backend/app/core/limiter.py
 import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from app.core.plans import resolve_plan_from_api_key, FREE
 
 def _rate_limit_key(request):
-    # per-user/device id from extension
+    # Per-device/user id (your extension sends this)
     client_id = request.headers.get("x-client-id")
     if client_id:
-        return f"client:{client_id.strip()}"
+        return f"client:{client_id}"
 
-    # fallback to proxy headers (Cloudflare/Render)
+    # Fallbacks
     cf_ip = request.headers.get("cf-connecting-ip")
     if cf_ip:
-        return f"ip:{cf_ip.strip()}"
+        return f"ip:{cf_ip}"
 
     xff = request.headers.get("x-forwarded-for")
     if xff:
@@ -19,8 +21,22 @@ def _rate_limit_key(request):
 
     return f"ip:{get_remote_address(request)}"
 
+def _tier_limit(request) -> str:
+    """
+    Dynamic limit string based on X-API-Key tier.
+    If key missing/invalid -> treat as FREE limit (and auth layer will block anyway).
+    """
+    api_key = request.headers.get("x-api-key", "")
+    try:
+        plan = resolve_plan_from_api_key(api_key)
+    except Exception:
+        plan = FREE
+    return plan.daily_limit
+
+REDIS_URL = os.getenv("REDIS_URL", "").strip() or None
+
 limiter = Limiter(
     key_func=_rate_limit_key,
-    storage_uri=os.getenv("REDIS_URL") or None,
-    default_limits=[os.getenv("DEFAULT_RATE_LIMIT", "60/minute")],
+    storage_uri=REDIS_URL,  # Redis if provided, memory if None
+    default_limits=[],      # We'll use per-route dynamic limits, not global defaults
 )
