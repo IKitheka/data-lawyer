@@ -29,7 +29,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 # ✅ Custom “upgrade style” 429 message
-@app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     api_key = request.headers.get("x-api-key", "")
     try:
