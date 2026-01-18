@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Depends
 from app.core.auth import require_api_key
 from app.core.limiter import limiter,tier_limit_provider
 
-router = APIRoute# backend/app/api/policies.py
+router = APIRouter# backend/app/api/policies.py
 from fastapi import APIRouter, Request, Depends
 
 from app.core.auth import require_api_key
