@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from slowapi import _rate_limit_exceeded_handler
 
 from app.core.limiter import limiter
 from app.core.plans import resolve_plan_from_api_key, FREE
@@ -18,12 +19,17 @@ app.state.limiter = limiter
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    # logs will still show full stacktrace, but client gets JSON
     traceback.print_exc()
-    return JSONResponse(status_code=500, content={"detail": "Internal server error","type":exc._class_._name_})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "type": exc.__class__.__name__,
+        },
+    )
 
 # ✅ Custom “upgrade style” 429 message
-@app.exception_handler(RateLimitExceeded)
+@app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     api_key = request.headers.get("x-api-key", "")
     try:
