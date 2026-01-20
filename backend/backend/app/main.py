@@ -1,12 +1,14 @@
-import os
 import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from backend.app.core.limiter import limiter
+from backend.app.core.plans import resolve_plan_from_api_key, FREE
+from backend.app.api import policies, requests as reqs, health
 
 app = FastAPI(title="Data Lawyer API", version="1.0.0")
 
@@ -14,7 +16,7 @@ app = FastAPI(title="Data Lawyer API", version="1.0.0")
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS (ok for extension testing)
+# CORS (tighten later)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,6 +25,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def root():
+    return {"message": "Data Lawyer API running"}
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+# 500 handler
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_request: Request, exc: Exception):
     traceback.print_exc()
@@ -31,50 +42,31 @@ async def unhandled_exception_handler(_request: Request, exc: Exception):
         content={"detail": "Internal server error", "type": exc.__class__.__name__},
     )
 
+# 429 handler
 @app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(_request: Request, _exc: RateLimitExceeded):
+async def rate_limit_handler(request: Request, _exc: RateLimitExceeded):
+    api_key = request.headers.get("x-api-key", "")
+    try:
+        plan = resolve_plan_from_api_key(api_key)
+    except Exception:
+        plan = FREE
+
+    upgrade_url = "https://your-site.com/pricing"
+
     return JSONResponse(
         status_code=429,
         content={
             "error": "RATE_LIMIT_REACHED",
-            "message": "Too many requests. Please retry later.",
+            "message": f"You’ve reached your {plan.display_name} plan limit ({plan.daily_limit}).",
+            "plan": plan.name,
+            "limit": plan.daily_limit,
+            "hint": plan.upgrade_hint,
+            "upgrade_url": upgrade_url,
         },
-        headers={"Retry-After": "60"},
+        headers={"Retry-After": "3600"},
     )
 
-# ✅ PROOF: verify what code is deployed
-@app.get("/__version")
-def __version():
-    return {
-        "ok": True,
-        "service": "data-lawyer",
-        "where": "backend/app/main.py",
-        "env_port": os.getenv("PORT"),
-    }
-
-# ✅ PROOF: verify headers arriving at Render
-@app.get("/__whoami")
-async def __whoami(request: Request):
-    return {
-        "x_api_key": request.headers.get("x-api-key"),
-        "x_client_id": request.headers.get("x-client-id"),
-        "origin": request.headers.get("origin"),
-        "host": request.headers.get("host"),
-        "cf_ray": request.headers.get("cf-ray"),
-    }
-
-# ✅ Minimal analyze route (no auth yet, no rate limit yet)
-@app.post("/policies/analyze")
-async def analyze(payload: dict, request: Request):
-    url = payload.get("url", "")
-    text = payload.get("text", "") or ""
-    return {
-        "risk_level": "UNKNOWN",
-        "risk_score": None,
-        "summary": f"Received {len(text)} chars for {url}.",
-        "red_flags": [],
-        "jurisdiction": "UNKNOWN",
-        "service_name": url,
-        "llm_model": "none",
-        "client_id": request.headers.get("x-client-id"),
-    }
+# routers
+app.include_router(policies.router, prefix="/policies", tags=["policies"])
+app.include_router(reqs.router, prefix="/requests", tags=["requests"])
+app.include_router(health.router, prefix="/health", tags=["health"])
