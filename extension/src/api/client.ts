@@ -10,8 +10,7 @@ function newClientId() {
 
 async function getClientId(): Promise<string> {
   const res = await chrome.storage.local.get([CLIENT_ID_KEY]);
-  const existing = res?.[CLIENT_ID_KEY];
-  if (typeof existing === "string" && existing.length > 8) return existing;
+  if (typeof res?.[CLIENT_ID_KEY] === "string") return res[CLIENT_ID_KEY];
 
   const id = newClientId();
   await chrome.storage.local.set({ [CLIENT_ID_KEY]: id });
@@ -20,19 +19,21 @@ async function getClientId(): Promise<string> {
 
 async function getApiKey(): Promise<string> {
   const res = await chrome.storage.local.get([KEY_STORAGE]);
-  return String(res?.[KEY_STORAGE] ?? "").trim();
+  return String(res?.[KEY_STORAGE] || "").trim();
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}) {
-  const [clientId, apiKey] = await Promise.all([getClientId(), getApiKey()]);
+  const [clientId, apiKey] = await Promise.all([
+    getClientId(),
+    getApiKey(),
+  ]);
 
   if (!apiKey) {
-    throw new Error("Missing API key in extension storage (DL_API_KEY).");
+    throw new Error("Missing API key (DL_API_KEY)");
   }
 
   const headers = new Headers(init.headers || {});
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-
+  headers.set("Content-Type", "application/json");
   headers.set("X-Client-Id", clientId);
   headers.set("X-API-Key", apiKey);
 
