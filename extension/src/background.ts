@@ -1,100 +1,141 @@
 // src/background.ts
 import { analyzePolicy } from "./api/policies";
 
-const API_TIMEOUT_MS = 90000; // ✅ 90s (Render cold start can be 30–60s)
+const REQUEST_TIMEOUT_MS = 20000;
+const MIN_GAP_MS = 6000; // at most 1 request per 6s per tab
 
-function keyForUrl(url: string) {
+type InFlightEntry = {
+  lastStart: number;
+  promise: Promise<any>;
+};
+
+const inFlightByTab = new Map<number, InFlightEntry>();
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("Request timed out")), ms);
+    p.then((v) => {
+      clearTimeout(t);
+      resolve(v);
+    }).catch((e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+  });
+}
+
+async function sha256Hex(text: string) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function normUrl(url: string) {
   return (url || "").trim().toLowerCase();
 }
 
-async function sha256(text: string): Promise<string> {
-  const enc = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function analyzeWithAbort(payload: { url: string; text: string; service_name?: string }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-
-  try {
-    // IMPORTANT: analyzePolicy must pass signal through apiFetch → fetch
-    return await analyzePolicy(payload, controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "ANALYZE_POLICY") return;
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "ANALYZE_POLICY") return;
 
   (async () => {
     try {
-      const url = String(message.url || "");
-      const text = String(message.text || "");
-      const title = message.title ? String(message.title) : undefined;
+      const tabId = sender.tab?.id ?? -1;
+      const url = String(msg.url || "");
+      const text = String(msg.text || "");
+      const title = msg.title ? String(msg.title) : undefined;
 
-      if (!url || !text) return sendResponse({ ok: false, error: "Missing url/text in message." });
+      if (!url || !text) {
+        sendResponse({ ok: false, error: "Missing url/text in message." });
+        return;
+      }
 
-      const urlKey = keyForUrl(url);
-      const newHash = await sha256(text);
+      // ✅ prevent spamming the API: 1 in-flight per tab + min gap
+      if (tabId >= 0) {
+        const existing = inFlightByTab.get(tabId);
+        const now = Date.now();
+
+        if (existing) {
+          // If a request is already running, just wait for it
+          const data = await existing.promise;
+          sendResponse({ ok: true, data, reused: true });
+          return;
+        }
+
+        // If last request was too recent, block quickly
+        const lastStart = (await chrome.storage.local.get([`dl_last_${tabId}`]))[`dl_last_${tabId}`];
+        if (typeof lastStart === "number" && now - lastStart < MIN_GAP_MS) {
+          sendResponse({ ok: false, error: "Too many requests. Wait a moment then try again." });
+          return;
+        }
+
+        await chrome.storage.local.set({ [`dl_last_${tabId}`]: now });
+      }
+
+      // Snapshot + change log
+      const u = normUrl(url);
+      const hash = await sha256Hex(text);
 
       const stored = await chrome.storage.local.get(["policySnapshots", "changeLog"]);
-      const policySnapshots: Record<string, any> = stored.policySnapshots || {};
-      const changeLog: any[] = stored.changeLog || [];
+      const policySnapshots = stored.policySnapshots || {};
+      const changeLog = stored.changeLog || [];
 
-      const prev = policySnapshots[urlKey];
-      const changed = !!prev && prev.last_hash !== newHash;
+      const prev = policySnapshots[u];
+      const changed = !!prev && prev.last_hash !== hash;
 
       if (changed && prev) {
         changeLog.unshift({
           url,
           title,
           old_hash: prev.last_hash,
-          new_hash: newHash,
+          new_hash: hash,
           changed_at: new Date().toISOString(),
         });
         if (changeLog.length > 30) changeLog.length = 30;
       }
 
-      policySnapshots[urlKey] = {
-        last_hash: newHash,
+      policySnapshots[u] = {
+        last_hash: hash,
         last_seen: new Date().toISOString(),
         last_url: url,
         last_title: title,
       };
 
-      console.log("[Data Lawyer] calling backend...", { url, textLen: text.length });
+      // ✅ actual API call
+      const work = withTimeout(
+        analyzePolicy({ url, text, service_name: msg.service_name || undefined }),
+        REQUEST_TIMEOUT_MS
+      );
 
-      const data = await analyzeWithAbort({
-        url,
-        text,
-        service_name: message.service_name || undefined,
+      if (tabId >= 0) {
+        inFlightByTab.set(tabId, { lastStart: Date.now(), promise: work });
+      }
+
+      const apiResult = await work.finally(() => {
+        if (tabId >= 0) inFlightByTab.delete(tabId);
       });
 
       const latestAnalysis = {
-        ...data,
+        ...apiResult,
         url,
         title,
         saved_at: new Date().toISOString(),
-        policy_hash: newHash,
+        policy_hash: hash,
         changed_since_last: changed,
       };
 
-      await chrome.storage.local.set({ latestAnalysis, policySnapshots, changeLog });
+      await chrome.storage.local.set({
+        latestAnalysis,
+        policySnapshots,
+        changeLog,
+      });
 
-      console.log("[Data Lawyer] backend OK", latestAnalysis);
       sendResponse({ ok: true, data: latestAnalysis });
-    } catch (err: any) {
-      const msg =
-        err?.name === "AbortError"
-          ? `Request timed out after ${API_TIMEOUT_MS / 1000}s (backend slow/cold start)`
-          : String(err?.message || err);
-
-      console.error("[Data Lawyer] backend FAIL:", msg);
-      sendResponse({ ok: false, error: msg });
+    } catch (e: any) {
+      sendResponse({ ok: false, error: String(e?.message || e) });
     }
   })();
 
-  return true;
+  return true; // async
 });
