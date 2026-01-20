@@ -1,55 +1,44 @@
 // src/background.ts
 import { analyzePolicy } from "./api/policies";
 
-const API_TIMEOUT_MS = 20000;
-
-// ---- helpers ----
-async function sha256(text: string): Promise<string> {
-  const enc = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+const API_TIMEOUT_MS = 90000; // ✅ 90s (Render cold start can be 30–60s)
 
 function keyForUrl(url: string) {
   return (url || "").trim().toLowerCase();
 }
 
-function withTimeout<T>(p: Promise<T>, timeoutMs: number) {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("Request timed out")), timeoutMs);
-
-    p.then((v) => {
-      clearTimeout(t);
-      resolve(v);
-    }).catch((e) => {
-      clearTimeout(t);
-      reject(e);
-    });
-  });
+async function sha256(text: string): Promise<string> {
+  const enc = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// ---- main listener ----
+async function analyzeWithAbort(payload: { url: string; text: string; service_name?: string }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
+  try {
+    // IMPORTANT: analyzePolicy must pass signal through apiFetch → fetch
+    return await analyzePolicy(payload, controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "ANALYZE_POLICY") return;
 
   (async () => {
     try {
-      const url: string = String(message.url || "");
-      const text: string = String(message.text || "");
-      const title: string | undefined = message.title ? String(message.title) : undefined;
+      const url = String(message.url || "");
+      const text = String(message.text || "");
+      const title = message.title ? String(message.title) : undefined;
 
-      if (!url || !text) {
-        sendResponse({ ok: false, error: "Missing url/text in message." });
-        return;
-      }
+      if (!url || !text) return sendResponse({ ok: false, error: "Missing url/text in message." });
 
-      // 1) Hash the policy text
       const urlKey = keyForUrl(url);
       const newHash = await sha256(text);
 
-      // 2) Load previous snapshot + changelog
       const stored = await chrome.storage.local.get(["policySnapshots", "changeLog"]);
       const policySnapshots: Record<string, any> = stored.policySnapshots || {};
       const changeLog: any[] = stored.changeLog || [];
@@ -57,7 +46,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const prev = policySnapshots[urlKey];
       const changed = !!prev && prev.last_hash !== newHash;
 
-      // 3) If changed, log an event
       if (changed && prev) {
         changeLog.unshift({
           url,
@@ -69,7 +57,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (changeLog.length > 30) changeLog.length = 30;
       }
 
-      // 4) Update snapshot for next time
       policySnapshots[urlKey] = {
         last_hash: newHash,
         last_seen: new Date().toISOString(),
@@ -77,17 +64,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         last_title: title,
       };
 
-      // 5) Call backend (with timeout)
-      const data = await withTimeout(
-        analyzePolicy({
-          url,
-          text,
-          service_name: message.service_name || undefined,
-        }),
-        API_TIMEOUT_MS
-      );
+      console.log("[Data Lawyer] calling backend...", { url, textLen: text.length });
 
-      // 6) Save latest analysis + change status for popup
+      const data = await analyzeWithAbort({
+        url,
+        text,
+        service_name: message.service_name || undefined,
+      });
+
       const latestAnalysis = {
         ...data,
         url,
@@ -97,17 +81,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         changed_since_last: changed,
       };
 
-      await chrome.storage.local.set({
-        latestAnalysis,
-        policySnapshots,
-        changeLog,
-      });
+      await chrome.storage.local.set({ latestAnalysis, policySnapshots, changeLog });
 
+      console.log("[Data Lawyer] backend OK", latestAnalysis);
       sendResponse({ ok: true, data: latestAnalysis });
     } catch (err: any) {
-      sendResponse({ ok: false, error: String(err?.message || err) });
+      const msg =
+        err?.name === "AbortError"
+          ? `Request timed out after ${API_TIMEOUT_MS / 1000}s (backend slow/cold start)`
+          : String(err?.message || err);
+
+      console.error("[Data Lawyer] backend FAIL:", msg);
+      sendResponse({ ok: false, error: msg });
     }
   })();
 
-  return true; // async response
+  return true;
 });

@@ -11,8 +11,8 @@ const manifest: ManifestV3Export = {
     default_title: "Data Lawyer",
   },
 
-  // Minimal permissions for faster approval
-  permissions: ["storage","tabs","activeTab"],
+  permissions: ["storage", "tabs", "activeTab"],
+
   host_permissions: ["https://data-lawyer.onrender.com/*"],
 
   background: {
@@ -22,8 +22,7 @@ const manifest: ManifestV3Export = {
 
   content_scripts: [
     {
-      // Only inject where it matters (faster review)
-      matches: ["*://*/*privacy*", "*://*/*terms*", "*://*/*policy*"],
+      matches: ["https://*/*", "http://*/*"],
       js: ["src/content-scripts/detectPolicyPages.ts"],
       run_at: "document_idle",
     },

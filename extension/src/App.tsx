@@ -252,36 +252,60 @@ export default function App() {
   // ✅ No chrome.scripting here (avoids executeScript undefined errors).
   // We just message the already-injected content script.
   async function analyzeNow() {
-    setBusy(true);
-    setError(null);
+  setBusy(true);
+  setError(null);
 
-    try {
-      const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!t?.id) {
-        setError("No active tab found.");
+  try {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!t?.id) {
+      setError("No active tab found.");
+      return;
+    }
+
+    if (!t.url || !/^https?:\/\//i.test(t.url)) {
+      setError("Open a normal website tab (http/https), then try again.");
+      return;
+    }
+
+    // PING
+    const has = await new Promise<boolean>((resolve) => {
+      chrome.tabs.sendMessage(t.id!, { type: "PING" }, (resp) => {
+        if (chrome.runtime.lastError) return resolve(false);
+        resolve(!!resp?.ok);
+      });
+    });
+
+    if (!has) {
+      setError("Content script not reachable. Reload the tab once (Ctrl+R) and try again.");
+      return;
+    }
+
+    // FORCE ANALYZE
+    chrome.tabs.sendMessage(t.id!, { type: "FORCE_ANALYZE" }, (resp) => {
+      if (chrome.runtime.lastError) {
+        setError("Could not reach the page script. Reload the page once, then try again.");
         setBusy(false);
         return;
       }
-
-      chrome.tabs.sendMessage(t.id, { type: "FORCE_ANALYZE" }, (resp) => {
-        const lastErr = chrome.runtime.lastError;
-        if (lastErr) {
-          setError("Could not reach the page script. Reload the page once, then try again.");
-          setBusy(false);
-          return;
-        }
-        if (!resp?.ok) {
-          setError(resp?.error || "Analyze failed.");
-          setBusy(false);
-          return;
-        }
+      if (!resp?.ok) {
+        setError(resp?.error || "Analyze failed.");
         setBusy(false);
-      });
-    } catch (e: any) {
-      setError(String(e?.message || e));
+        return;
+      }
       setBusy(false);
-    }
+    });
+  } catch (e: any) {
+    setError(String(e?.message || e));
+  } finally {
+    setBusy(false);
   }
+}
+
+
+
+
+
 
   const level = analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA";
   const levelDot = riskColor(level);

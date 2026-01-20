@@ -11,7 +11,7 @@ class Plan:
 
 FREE = Plan(
     name="free",
-    daily_limit=os.getenv("FREE_DAILY_LIMIT", "20/day"),
+    daily_limit=os.getenv("FREE_DAILY_LIMIT", "2000/day"),
     display_name="Free",
     upgrade_hint="Upgrade to Pro for more daily analyses."
 )
