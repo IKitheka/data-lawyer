@@ -1,3 +1,4 @@
+# backend/app/main.py
 import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -37,7 +38,7 @@ async def unhandled_exception_handler(_request: Request, exc: Exception):
         },
     )
 
-# ✅ Custom “upgrade style” 429 handler
+# ✅ Custom “upgrade style” 429 handler (THIS is what you wanted)
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, _exc: RateLimitExceeded):
     api_key = request.headers.get("x-api-key", "")
@@ -48,6 +49,8 @@ async def rate_limit_handler(request: Request, _exc: RateLimitExceeded):
 
     upgrade_url = "https://your-site.com/pricing"
 
+    # NOTE: Retry-After is typically a response header, not a request header.
+    # We'll provide a sensible default.
     return JSONResponse(
         status_code=429,
         content={
