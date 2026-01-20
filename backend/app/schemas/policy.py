@@ -5,6 +5,7 @@ class PolicyAnalyzeInput(BaseModel):
     url: str
     text: str
     service_name: Optional[str] = None
+    title: Optional[str] = None
 
 class PolicyAnalysisOut(BaseModel):
     id: int

@@ -9,6 +9,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.limiter import limiter
 from app.core.plans import resolve_plan_from_api_key, FREE
+from app.routes import policies
 
 from app.api import policies, requests as reqs, health
 
