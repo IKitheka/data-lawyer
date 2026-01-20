@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Request, Depends
-from app.core.auth import require_api_key
-from app.core.limiter import limiter, tier_limit_provider
+from backend.app.core.auth import require_api_key
+from backend.app.core.limiter import limiter, tier_limit_provider
 import re
 
 router = APIRouter()
 
-# simple keyword-based "MVP" analyzer (fast, no LLM)
 RED_FLAG_RULES = [
     ("share", r"\bshare\b|\bshared\b|\bsharing\b"),
     ("sell", r"\bsell\b|\bsold\b|\bselling\b"),
@@ -25,18 +24,16 @@ def guess_jurisdiction(text: str) -> str:
         return "EU"
     if "california" in t or "ccpa" in t or "cpra" in t:
         return "US-CA"
-    if "united states" in t or "us privacy" in t:
+    if "united states" in t:
         return "US"
     if "kenya" in t or "data protection act" in t:
         return "KE"
     return "UNKNOWN"
 
 def summarize(text: str, max_sentences: int = 3) -> str:
-    # crude but effective: pick first meaningful sentences
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return "No readable policy text found on this page."
-
     sentences = re.split(r"(?<=[.!?])\s+", cleaned)
     picked = []
     for s in sentences:
@@ -46,10 +43,7 @@ def summarize(text: str, max_sentences: int = 3) -> str:
         picked.append(s)
         if len(picked) >= max_sentences:
             break
-
-    if not picked:
-        return "Policy text detected, but could not extract clear sentences."
-    return " ".join(picked)
+    return " ".join(picked) if picked else "Policy text detected, but could not extract clear sentences."
 
 @router.post("/analyze")
 @limiter.limit(tier_limit_provider)
@@ -57,15 +51,10 @@ async def analyze_policy(request: Request, payload: dict, plan=Depends(require_a
     url = str(payload.get("url") or "")
     text = str(payload.get("text") or "")
 
-    # Analyze flags
-    flags = []
     t = text.lower()
-    for label, pattern in RED_FLAG_RULES:
-        if re.search(pattern, t):
-            flags.append(label)
+    flags = [label for (label, pattern) in RED_FLAG_RULES if re.search(pattern, t)]
 
-    # Risk score (simple scoring)
-    score = min(100, len(flags) * 12)  # 0..100
+    score = min(100, len(flags) * 12)
     if score >= 60:
         level = "HIGH"
     elif score >= 25:
