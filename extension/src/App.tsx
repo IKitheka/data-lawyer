@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PolicyAnalysis } from "./types";
+import ReactMarkdown from "react-markdown";
 
 type Stored = {
   latestAnalysis?: PolicyAnalysis;
@@ -54,7 +55,7 @@ function badge(level?: string) {
   const c = riskColor(level);
   return {
     background: `linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02))`,
-    border: `1px solid ${c}`,              // ✅ use c here
+    border: `1px solid ${c}`,
     boxShadow: `0 0 0 3px rgba(255,255,255,0.06)`,
     color: UI.text,
     padding: "6px 10px",
@@ -67,7 +68,6 @@ function badge(level?: string) {
     letterSpacing: 0.4,
   };
 }
-
 
 function pillDot(color: string) {
   return {
@@ -249,63 +249,54 @@ export default function App() {
     chrome.tabs.create({ url: analysis.url });
   }
 
-  // ✅ No chrome.scripting here (avoids executeScript undefined errors).
-  // We just message the already-injected content script.
   async function analyzeNow() {
-  setBusy(true);
-  setError(null);
+    setBusy(true);
+    setError(null);
 
-  try {
-    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!t?.id) {
-      setError("No active tab found.");
-      return;
-    }
+      if (!t?.id) {
+        setError("No active tab found.");
+        return;
+      }
 
-    if (!t.url || !/^https?:\/\//i.test(t.url)) {
-      setError("Open a normal website tab (http/https), then try again.");
-      return;
-    }
+      if (!t.url || !/^https?:\/\//i.test(t.url)) {
+        setError("Open a normal website tab (http/https), then try again.");
+        return;
+      }
 
-    // PING
-    const has = await new Promise<boolean>((resolve) => {
-      chrome.tabs.sendMessage(t.id!, { type: "PING" }, (resp) => {
-        if (chrome.runtime.lastError) return resolve(false);
-        resolve(!!resp?.ok);
+      const has = await new Promise<boolean>((resolve) => {
+        chrome.tabs.sendMessage(t.id!, { type: "PING" }, (resp) => {
+          if (chrome.runtime.lastError) return resolve(false);
+          resolve(!!resp?.ok);
+        });
       });
-    });
 
-    if (!has) {
-      setError("Content script not reachable. Reload the tab once (Ctrl+R) and try again.");
-      return;
-    }
-
-    // FORCE ANALYZE
-    chrome.tabs.sendMessage(t.id!, { type: "FORCE_ANALYZE" }, (resp) => {
-      if (chrome.runtime.lastError) {
-        setError("Could not reach the page script. Reload the page once, then try again.");
-        setBusy(false);
+      if (!has) {
+        setError("Content script not reachable. Reload the tab once (Ctrl+R) and try again.");
         return;
       }
-      if (!resp?.ok) {
-        setError(resp?.error || "Analyze failed.");
+
+      chrome.tabs.sendMessage(t.id!, { type: "FORCE_ANALYZE" }, (resp) => {
+        if (chrome.runtime.lastError) {
+          setError("Could not reach the page script. Reload the page once, then try again.");
+          setBusy(false);
+          return;
+        }
+        if (!resp?.ok) {
+          setError(resp?.error || "Analyze failed.");
+          setBusy(false);
+          return;
+        }
         setBusy(false);
-        return;
-      }
+      });
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
       setBusy(false);
-    });
-  } catch (e: any) {
-    setError(String(e?.message || e));
-  } finally {
-    setBusy(false);
+    }
   }
-}
-
-
-
-
-
 
   const level = analysis?.risk_level ? String(analysis.risk_level).toUpperCase() : "NO DATA";
   const levelDot = riskColor(level);
@@ -434,17 +425,69 @@ export default function App() {
             >
               {tab === "overview" ? (
                 <>
-                  <div style={{ fontSize: 12, fontWeight: 950 }}>Summary</div>
-                  <div style={{ marginTop: 8, fontSize: 12, color: UI.text, lineHeight: 1.55 }}>
-                    {analysis.summary || "No summary available yet."}
-                  </div>
-
-                  <div style={{ height: 10 }} />
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <InfoRow label="Jurisdiction" value={analysis.jurisdiction || "UNKNOWN"} />
                     {(analysis as any)?.llm_model ? (
                       <InfoRow label="LLM model" value={String((analysis as any).llm_model)} />
                     ) : null}
+                  </div>
+
+                  <div style={{ height: 12 }} />
+
+                  <div style={{ fontSize: 12, fontWeight: 950 }}>Summary</div>
+
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12,
+                      color: UI.text,
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    <ReactMarkdown
+                      components={{
+                        h2: ({ children }) => (
+                          <div style={{ marginTop: 10, fontSize: 13, fontWeight: 950 }}>
+                            {children}
+                          </div>
+                        ),
+                        h3: ({ children }) => (
+                          <div style={{ marginTop: 10, fontSize: 12, fontWeight: 900, color: UI.text }}>
+                            {children}
+                          </div>
+                        ),
+                        p: ({ children }) => (
+                          <div style={{ marginTop: 6, color: UI.text }}>
+                            {children}
+                          </div>
+                        ),
+                        ul: ({ children }) => (
+                          <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                            {children}
+                          </ul>
+                        ),
+                        li: ({ children }) => (
+                          <li style={{ marginBottom: 8, color: UI.text }}>
+                            <span style={{ color: UI.muted }}>{children}</span>
+                          </li>
+                        ),
+                        a: ({ children, href }) => (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: UI.blue, fontWeight: 850, textDecoration: "none" }}
+                          >
+                            {children}
+                          </a>
+                        ),
+                        strong: ({ children }) => (
+                          <strong style={{ color: UI.text, fontWeight: 950 }}>{children}</strong>
+                        ),
+                      }}
+                    >
+                      {analysis.summary || "No summary available yet."}
+                    </ReactMarkdown>
                   </div>
                 </>
               ) : null}
