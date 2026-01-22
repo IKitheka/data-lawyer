@@ -5,7 +5,6 @@ import re
 from urllib.parse import urlparse
 
 router = APIRouter()
-
 MAX_CHARS = 20000
 
 
@@ -19,7 +18,6 @@ def _domain_from_url(url: str) -> str:
 
 def _detect_jurisdiction(text: str) -> str:
     t = text.lower()
-    # Very lightweight signals; you can expand later.
     if "gdpr" in t or "european union" in t or "eea" in t:
         return "EU"
     if "california consumer privacy act" in t or "ccpa" in t or "cpra" in t:
@@ -40,17 +38,11 @@ def _normalize_space(s: str) -> str:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """
-    Split into sentence-ish chunks.
-    - Break on punctuation boundaries or newlines.
-    - Keep only reasonably informative lines.
-    """
-    chunks = re.split(r"(?<=[.!?])\s+|\n{2,}|\r\n{2,}", text)
+    chunks = re.split(r"(?<=[.!?])\s+|\n{1,}|\r\n{1,}", text)
     out: list[str] = []
     for ch in chunks:
         s = _normalize_space(ch)
-        # Keep lines that likely contain meaning. (Avoid nav/footer junk.)
-        if 45 <= len(s) <= 420:
+        if 20 <= len(s) <= 520:
             out.append(s)
     return out
 
@@ -106,83 +98,151 @@ def _mk_section(title: str, items: list[str]) -> str:
     return f"### {title}\n{lines}\n"
 
 
-def _score_sentence(sentence: str, keywords: list[str]) -> int:
-    """
-    Score a sentence by:
-    - keyword hits
-    - strong modal verbs that often indicate policy commitments
-    - avoiding low-value boilerplate
-    """
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+
+
+def _section_config():
+    # Keywords = general hints
+    # strong = section-specific “must belong here” signals
+    # avoid = terms that suggest it belongs elsewhere
+    return [
+        {
+            "title": "Data collected",
+            "keywords": ["collect", "personal information", "information you provide", "device information", "usage data", "identifiers"],
+            "strong": ["we collect", "we may collect", "information we collect", "data we collect"],
+            "avoid": ["opt out", "unsubscribe", "contact us"],
+            "max_items": 3,
+        },
+        {
+            "title": "How data is used",
+            "keywords": ["use", "purpose", "to provide", "to improve", "to operate", "to maintain", "to personalize", "to comply"],
+            "strong": ["we use", "we may use", "how we use"],
+            "avoid": ["contact us"],
+            "max_items": 3,
+        },
+        {
+            "title": "Sharing & third parties",
+            "keywords": ["share", "third party", "third-party", "service provider", "vendors", "partners", "affiliates", "processors"],
+            "strong": ["we share", "we may share"],
+            "avoid": ["opt out", "unsubscribe"],
+            "max_items": 3,
+        },
+        {
+            "title": "Retention",
+            "keywords": ["retain", "retention", "how long", "as long as", "keep"],
+            "strong": ["we retain", "we may retain", "we keep", "as long as necessary"],
+            "avoid": ["contact us", "opt out", "unsubscribe"],
+            "max_items": 2,
+        },
+        {
+            "title": "Your rights & choices",
+            "keywords": ["your rights", "opt out", "opt-out", "unsubscribe", "delete", "access", "rectify", "erasure", "object"],
+            "strong": ["you may opt out", "you can opt out", "you may delete", "you can delete", "unsubscribe"],
+            "avoid": ["encryption", "safeguard"],
+            "max_items": 3,
+        },
+        {
+            "title": "Security",
+            "keywords": ["security", "safeguard", "protect", "encryption", "secure"],
+            "strong": ["we protect", "we safeguard", "encryption"],
+            "avoid": ["opt out", "unsubscribe", "contact us"],
+            "max_items": 2,
+        },
+        {
+            "title": "International transfers",
+            "keywords": ["international", "transfer", "outside", "cross-border", "scc"],
+            "strong": ["international transfer", "cross-border"],
+            "avoid": ["opt out", "unsubscribe"],
+            "max_items": 2,
+        },
+        {
+            "title": "Contact / complaints",
+            "keywords": ["contact", "reach us", "complaint", "dpo", "data protection officer", "email"],
+            "strong": ["contact us", "reach us", "dpo"],
+            "avoid": ["we share", "we retain"],
+            "max_items": 2,
+        },
+    ]
+
+
+def _score_for_section(sentence: str, cfg: dict) -> int:
     s = sentence.lower()
     score = 0
 
     # keyword hits
-    for k in keywords:
+    for k in cfg["keywords"]:
         if k in s:
             score += 3
 
-    # "policy voice" signals
-    if "we collect" in s or "we may collect" in s:
-        score += 4
-    if "we use" in s or "we may use" in s:
-        score += 3
-    if "we share" in s or "we may share" in s:
-        score += 4
-    if "you may" in s or "you can" in s:
-        score += 2
-    if "opt out" in s or "opt-out" in s:
-        score += 3
+    # strong section signals
+    for p in cfg["strong"]:
+        if p in s:
+            score += 7
 
-    # lightly downscore likely boilerplate/navigation junk
-    junk = ["copyright", "all rights reserved", "cookie preferences", "skip to content", "accept cookies"]
-    if any(j in s for j in junk):
-        score -= 4
+    # contact section boost if email exists
+    if cfg["title"] == "Contact / complaints" and EMAIL_RE.search(sentence):
+        score += 10
 
-    # length heuristic: too short or too long reduces quality
+    # penalties for “belongs elsewhere”
+    for a in cfg.get("avoid", []):
+        if a in s:
+            score -= 4
+
+    # light length shaping
     n = len(sentence)
-    if n < 70:
+    if n < 35:
         score -= 1
-    if n > 280:
+    if n > 320:
         score -= 1
 
     return score
 
 
-def _top_evidence(text: str, keywords: list[str], max_items: int) -> list[str]:
-    """
-    Pick the strongest sentences for a section.
-    """
+def _assign_sentences_to_sections(text: str) -> dict[str, list[str]]:
+    cfgs = _section_config()
+    buckets: dict[str, list[tuple[int, str]]] = {c["title"]: [] for c in cfgs}
+
     sents = _split_sentences(text)
-    scored: list[tuple[int, str]] = []
-    seen = set()
+    seen_global = set()
 
-    for s in sents:
-        sc = _score_sentence(s, keywords)
-        if sc <= 0:
+    for sent in sents:
+        # score against all sections, choose best one
+        best_title = None
+        best_score = -999
+
+        for c in cfgs:
+            sc = _score_for_section(sent, c)
+
+            # must have at least some real signal for that section
+            if sc < 4:
+                continue
+
+            if sc > best_score:
+                best_score = sc
+                best_title = c["title"]
+
+        if not best_title:
             continue
-        # require at least one keyword hit OR a strong "we ..." signal
-        sl = s.lower()
-        if not any(k in sl for k in keywords) and not (
-            "we collect" in sl or "we use" in sl or "we share" in sl or "opt out" in sl or "opt-out" in sl
-        ):
+
+        # global de-dupe so one sentence only appears once in whole summary
+        s2 = sent[:240] + ("…" if len(sent) > 240 else "")
+        if s2 in seen_global:
             continue
+        seen_global.add(s2)
 
-        s2 = s[:240] + ("…" if len(s) > 240 else "")
-        if s2 in seen:
-            continue
-        seen.add(s2)
-        scored.append((sc, s2))
+        buckets[best_title].append((best_score, s2))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [s for _, s in scored[:max_items]]
+    # sort & trim
+    for c in cfgs:
+        title = c["title"]
+        buckets[title].sort(key=lambda x: x[0], reverse=True)
+        buckets[title] = [s for _, s in buckets[title][: c["max_items"]]]
+
+    return buckets
 
 
-def _build_takeaways(domain: str, jurisdiction: str, score: int, level: str, red_flags: list[str], sections_found: dict) -> list[str]:
-    """
-    Build 3–6 bullets that are human-scannable.
-    """
+def _build_takeaways(domain: str, jurisdiction: str, score: int, level: str, red_flags: list[str], buckets: dict[str, list[str]]) -> list[str]:
     takeaways: list[str] = []
-
     takeaways.append(f"Risk level: **{level}** (score **{score}/100**)")
 
     if jurisdiction and jurisdiction != "UNKNOWN":
@@ -190,64 +250,26 @@ def _build_takeaways(domain: str, jurisdiction: str, score: int, level: str, red
     else:
         takeaways.append("Jurisdiction signals: **UNKNOWN** (no clear legal references found)")
 
-    # If we found no evidence for some key sections, highlight that.
-    missing = [k for k, v in sections_found.items() if not v]
+    missing = [k for k, v in buckets.items() if not v]
     if missing:
-        # Keep it short
         takeaways.append("Missing/unclear: " + ", ".join([f"**{m}**" for m in missing[:4]]) + ("…" if len(missing) > 4 else ""))
 
     if red_flags:
         takeaways.append("Top concern: " + red_flags[0])
 
-    # Add one more "action" style tip
-    if "Your rights & choices" in missing:
-        takeaways.append("Action: Look for an **opt-out / delete request** link or contact email before accepting.")
-    else:
+    if buckets.get("Your rights & choices"):
         takeaways.append("Action: Review **opt-out/delete** steps and whether they apply to your country.")
+    else:
+        takeaways.append("Action: Look for an **opt-out / delete request** link or contact email before accepting.")
 
     return takeaways[:6]
 
 
-def _build_sectioned_summary(url: str, text: str, jurisdiction: str, score: int, level: str, red_flags: list[str]) -> str:
+def _build_summary(url: str, text: str, jurisdiction: str, score: int, level: str, red_flags: list[str]) -> str:
     domain = _domain_from_url(url)
+    buckets = _assign_sentences_to_sections(text)
 
-    # Expanded keywords per section (cover common phrasing variants)
-    sections = [
-        ("Data collected", [
-            "information we collect", "we collect", "data we collect", "personal information",
-            "information you provide", "device information", "log data", "usage data"
-        ], 3),
-        ("How data is used", [
-            "how we use", "we use", "purpose", "to provide", "to improve", "to operate", "to maintain",
-            "to personalize", "to communicate", "to comply", "legal basis"
-        ], 3),
-        ("Sharing & third parties", [
-            "we share", "share", "sharing", "third party", "third-party", "service provider",
-            "affiliates", "partners", "vendors", "processors"
-        ], 3),
-        ("Retention", [
-            "retain", "retention", "keep", "storage duration", "how long", "we store"
-        ], 2),
-        ("Your rights & choices", [
-            "your rights", "access", "delete", "erasure", "rectify", "opt out", "opt-out",
-            "object", "appeal", "data subject", "unsubscribe"
-        ], 3),
-        ("Security", [
-            "security", "safeguard", "protect", "encryption", "secure", "technical and organizational"
-        ], 2),
-        ("International transfers", [
-            "international", "transfer", "outside", "cross-border", "standard contractual", "scc"
-        ], 2),
-        ("Contact / complaints", [
-            "contact", "email", "dpo", "data protection officer", "complaint", "supervisory authority"
-        ], 2),
-    ]
-
-    found: dict[str, list[str]] = {}
-    for title, kws, n in sections:
-        found[title] = _top_evidence(text, kws, n)
-
-    takeaways = _build_takeaways(domain, jurisdiction, score, level, red_flags, found)
+    takeaways = _build_takeaways(domain, jurisdiction, score, level, red_flags, buckets)
 
     out: list[str] = []
     out.append("## Policy Summary")
@@ -258,8 +280,10 @@ def _build_sectioned_summary(url: str, text: str, jurisdiction: str, score: int,
     out.append("")
     out.append("### Evidence by section")
     out.append("")
-    for title, _kws, _n in sections:
-        out.append(_mk_section(title, found.get(title, [])))
+
+    for c in _section_config():
+        title = c["title"]
+        out.append(_mk_section(title, buckets.get(title, [])))
 
     return "\n".join(out).strip()
 
@@ -275,14 +299,14 @@ async def analyze_policy(request: Request, payload: dict, _plan=Depends(require_
     score, red_flags = _risk_and_flags(text)
     level = _risk_level(score)
 
-    summary_md = _build_sectioned_summary(url, text, jurisdiction, score, level, red_flags)
+    summary_md = _build_summary(url, text, jurisdiction, score, level, red_flags)
 
     return {
         "risk_level": level,
         "risk_score": score,
-        "summary": summary_md,  # markdown
+        "summary": summary_md,
         "red_flags": red_flags,
         "jurisdiction": jurisdiction,
         "service_name": domain,
-        "llm_model": "heuristics-sections-v2",
+        "llm_model": "heuristics-sections-v4",
     }
