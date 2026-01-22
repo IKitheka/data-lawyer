@@ -6,6 +6,9 @@ from urllib.parse import urlparse
 
 router = APIRouter()
 
+MAX_CHARS = 20000
+
+
 def _domain_from_url(url: str) -> str:
     try:
         host = urlparse(url).hostname or ""
@@ -13,8 +16,10 @@ def _domain_from_url(url: str) -> str:
     except Exception:
         return url
 
+
 def _detect_jurisdiction(text: str) -> str:
     t = text.lower()
+    # Very lightweight signals; you can expand later.
     if "gdpr" in t or "european union" in t or "eea" in t:
         return "EU"
     if "california consumer privacy act" in t or "ccpa" in t or "cpra" in t:
@@ -29,32 +34,30 @@ def _detect_jurisdiction(text: str) -> str:
         return "US"
     return "UNKNOWN"
 
+
+def _normalize_space(s: str) -> str:
+    return " ".join((s or "").strip().split())
+
+
 def _split_sentences(text: str) -> list[str]:
-    chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
-    out = []
+    """
+    Split into sentence-ish chunks.
+    - Break on punctuation boundaries or newlines.
+    - Keep only reasonably informative lines.
+    """
+    chunks = re.split(r"(?<=[.!?])\s+|\n{2,}|\r\n{2,}", text)
+    out: list[str] = []
     for ch in chunks:
-        s = " ".join(ch.strip().split())
-        if len(s) >= 40:
+        s = _normalize_space(ch)
+        # Keep lines that likely contain meaning. (Avoid nav/footer junk.)
+        if 45 <= len(s) <= 420:
             out.append(s)
     return out
 
-def _pick_examples(text: str, keywords: list[str], max_items: int = 3) -> list[str]:
-    sents = _split_sentences(text)
-    out, seen = [], set()
-    for s in sents:
-        sl = s.lower()
-        if any(k in sl for k in keywords):
-            s2 = s[:240] + ("…" if len(s) > 240 else "")
-            if s2 not in seen:
-                out.append(s2)
-                seen.add(s2)
-        if len(out) >= max_items:
-            break
-    return out
 
 def _risk_and_flags(text: str) -> tuple[int, list[str]]:
     t = text.lower()
-    flags = []
+    flags: list[str] = []
     score = 10
 
     def hit(cond: bool, points: int, msg: str):
@@ -87,6 +90,7 @@ def _risk_and_flags(text: str) -> tuple[int, list[str]]:
     score = max(0, min(100, score))
     return score, flags[:12]
 
+
 def _risk_level(score: int) -> str:
     if score >= 70:
         return "HIGH"
@@ -94,57 +98,191 @@ def _risk_level(score: int) -> str:
         return "MEDIUM"
     return "LOW"
 
+
 def _mk_section(title: str, items: list[str]) -> str:
     if not items:
-        return f"### {title}\n- Not clearly stated in the first 20k characters.\n"
+        return f"### {title}\n- Not clearly stated in the first {MAX_CHARS//1000}k characters.\n"
     lines = "\n".join([f"- {x}" for x in items])
     return f"### {title}\n{lines}\n"
 
-def _build_sectioned_summary(url: str, text: str) -> str:
-    # Extract evidence-like lines (small snippets) per section
-    collected = _pick_examples(text, ["information we collect", "we collect", "personal information", "data we collect"], 3)
-    used = _pick_examples(text, ["how we use", "we use", "purpose", "to provide", "improve"], 3)
-    sharing = _pick_examples(text, ["share", "sharing", "third party", "service provider"], 3)
-    retention = _pick_examples(text, ["retain", "retention", "keep your", "storage duration"], 2)
-    rights = _pick_examples(text, ["your rights", "access", "delete", "erasure", "opt out", "opt-out", "rectify"], 3)
-    security = _pick_examples(text, ["security", "safeguard", "protect", "encryption"], 2)
-    transfers = _pick_examples(text, ["international", "transfer", "outside", "cross-border"], 2)
-    contact = _pick_examples(text, ["contact", "email", "dpo", "data protection officer"], 2)
 
+def _score_sentence(sentence: str, keywords: list[str]) -> int:
+    """
+    Score a sentence by:
+    - keyword hits
+    - strong modal verbs that often indicate policy commitments
+    - avoiding low-value boilerplate
+    """
+    s = sentence.lower()
+    score = 0
+
+    # keyword hits
+    for k in keywords:
+        if k in s:
+            score += 3
+
+    # "policy voice" signals
+    if "we collect" in s or "we may collect" in s:
+        score += 4
+    if "we use" in s or "we may use" in s:
+        score += 3
+    if "we share" in s or "we may share" in s:
+        score += 4
+    if "you may" in s or "you can" in s:
+        score += 2
+    if "opt out" in s or "opt-out" in s:
+        score += 3
+
+    # lightly downscore likely boilerplate/navigation junk
+    junk = ["copyright", "all rights reserved", "cookie preferences", "skip to content", "accept cookies"]
+    if any(j in s for j in junk):
+        score -= 4
+
+    # length heuristic: too short or too long reduces quality
+    n = len(sentence)
+    if n < 70:
+        score -= 1
+    if n > 280:
+        score -= 1
+
+    return score
+
+
+def _top_evidence(text: str, keywords: list[str], max_items: int) -> list[str]:
+    """
+    Pick the strongest sentences for a section.
+    """
+    sents = _split_sentences(text)
+    scored: list[tuple[int, str]] = []
+    seen = set()
+
+    for s in sents:
+        sc = _score_sentence(s, keywords)
+        if sc <= 0:
+            continue
+        # require at least one keyword hit OR a strong "we ..." signal
+        sl = s.lower()
+        if not any(k in sl for k in keywords) and not (
+            "we collect" in sl or "we use" in sl or "we share" in sl or "opt out" in sl or "opt-out" in sl
+        ):
+            continue
+
+        s2 = s[:240] + ("…" if len(s) > 240 else "")
+        if s2 in seen:
+            continue
+        seen.add(s2)
+        scored.append((sc, s2))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in scored[:max_items]]
+
+
+def _build_takeaways(domain: str, jurisdiction: str, score: int, level: str, red_flags: list[str], sections_found: dict) -> list[str]:
+    """
+    Build 3–6 bullets that are human-scannable.
+    """
+    takeaways: list[str] = []
+
+    takeaways.append(f"Risk level: **{level}** (score **{score}/100**)")
+
+    if jurisdiction and jurisdiction != "UNKNOWN":
+        takeaways.append(f"Jurisdiction signals: **{jurisdiction}**")
+    else:
+        takeaways.append("Jurisdiction signals: **UNKNOWN** (no clear legal references found)")
+
+    # If we found no evidence for some key sections, highlight that.
+    missing = [k for k, v in sections_found.items() if not v]
+    if missing:
+        # Keep it short
+        takeaways.append("Missing/unclear: " + ", ".join([f"**{m}**" for m in missing[:4]]) + ("…" if len(missing) > 4 else ""))
+
+    if red_flags:
+        takeaways.append("Top concern: " + red_flags[0])
+
+    # Add one more "action" style tip
+    if "Your rights & choices" in missing:
+        takeaways.append("Action: Look for an **opt-out / delete request** link or contact email before accepting.")
+    else:
+        takeaways.append("Action: Review **opt-out/delete** steps and whether they apply to your country.")
+
+    return takeaways[:6]
+
+
+def _build_sectioned_summary(url: str, text: str, jurisdiction: str, score: int, level: str, red_flags: list[str]) -> str:
     domain = _domain_from_url(url)
 
-    summary = []
-    summary.append(f"## Policy Summary (sectioned)\n**Site:** {domain}\n")
-    summary.append(_mk_section("Data collected", collected))
-    summary.append(_mk_section("How data is used", used))
-    summary.append(_mk_section("Sharing & third parties", sharing))
-    summary.append(_mk_section("Retention", retention))
-    summary.append(_mk_section("Your rights & choices", rights))
-    summary.append(_mk_section("Security", security))
-    summary.append(_mk_section("International transfers", transfers))
-    summary.append(_mk_section("Contact / complaints", contact))
+    # Expanded keywords per section (cover common phrasing variants)
+    sections = [
+        ("Data collected", [
+            "information we collect", "we collect", "data we collect", "personal information",
+            "information you provide", "device information", "log data", "usage data"
+        ], 3),
+        ("How data is used", [
+            "how we use", "we use", "purpose", "to provide", "to improve", "to operate", "to maintain",
+            "to personalize", "to communicate", "to comply", "legal basis"
+        ], 3),
+        ("Sharing & third parties", [
+            "we share", "share", "sharing", "third party", "third-party", "service provider",
+            "affiliates", "partners", "vendors", "processors"
+        ], 3),
+        ("Retention", [
+            "retain", "retention", "keep", "storage duration", "how long", "we store"
+        ], 2),
+        ("Your rights & choices", [
+            "your rights", "access", "delete", "erasure", "rectify", "opt out", "opt-out",
+            "object", "appeal", "data subject", "unsubscribe"
+        ], 3),
+        ("Security", [
+            "security", "safeguard", "protect", "encryption", "secure", "technical and organizational"
+        ], 2),
+        ("International transfers", [
+            "international", "transfer", "outside", "cross-border", "standard contractual", "scc"
+        ], 2),
+        ("Contact / complaints", [
+            "contact", "email", "dpo", "data protection officer", "complaint", "supervisory authority"
+        ], 2),
+    ]
 
-    return "\n".join(summary).strip()
+    found: dict[str, list[str]] = {}
+    for title, kws, n in sections:
+        found[title] = _top_evidence(text, kws, n)
+
+    takeaways = _build_takeaways(domain, jurisdiction, score, level, red_flags, found)
+
+    out: list[str] = []
+    out.append("## Policy Summary")
+    out.append(f"**Site:** {domain}")
+    out.append("")
+    out.append("### Key takeaways")
+    out.extend([f"- {t}" for t in takeaways])
+    out.append("")
+    out.append("### Evidence by section")
+    out.append("")
+    for title, _kws, _n in sections:
+        out.append(_mk_section(title, found.get(title, [])))
+
+    return "\n".join(out).strip()
+
 
 @router.post("/analyze")
 @limiter.limit(tier_limit_provider)
 async def analyze_policy(request: Request, payload: dict, _plan=Depends(require_api_key)):
     url = str(payload.get("url") or "")
-    text = str(payload.get("text") or "")[:20000]
+    text = str(payload.get("text") or "")[:MAX_CHARS]
 
     domain = _domain_from_url(url)
     jurisdiction = _detect_jurisdiction(text)
     score, red_flags = _risk_and_flags(text)
     level = _risk_level(score)
 
-    sectioned_summary = _build_sectioned_summary(url, text)
+    summary_md = _build_sectioned_summary(url, text, jurisdiction, score, level, red_flags)
 
     return {
         "risk_level": level,
         "risk_score": score,
-        "summary": sectioned_summary,            # <— now sectioned markdown
+        "summary": summary_md,  # markdown
         "red_flags": red_flags,
         "jurisdiction": jurisdiction,
         "service_name": domain,
-        "llm_model": "heuristics-sections-v1",
+        "llm_model": "heuristics-sections-v2",
     }
