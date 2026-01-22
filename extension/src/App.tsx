@@ -425,69 +425,49 @@ export default function App() {
             >
               {tab === "overview" ? (
                 <>
+                  <div style={{ fontSize: 12, fontWeight: 950 }}>Summary</div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <ReactMarkdown
+                      components={{
+                        h2: ({ children }) => (
+                          <div style={{ fontSize: 13, fontWeight: 950, marginTop: 6, marginBottom: 6 }}>
+                            {children}
+                          </div>
+                        ),
+                        h3: ({ children }) => (
+                          <div style={{ fontSize: 12, fontWeight: 900, marginTop: 10, marginBottom: 6 }}>
+                            {children}
+                          </div>
+                        ),
+                        p: ({ children }) => (
+                          <div style={{ fontSize: 12, color: UI.text, lineHeight: 1.6, marginBottom: 8 }}>
+                            {children}
+                          </div>
+                        ),
+                        ul: ({ children }) => (
+                          <ul style={{ margin: "6px 0 10px 18px", padding: 0, fontSize: 12, lineHeight: 1.6 }}>
+                            {children}
+                          </ul>
+                        ),
+                        li: ({ children }) => (
+                          <li style={{ marginBottom: 6, color: UI.muted }}>
+                            <span style={{ color: UI.text }}>{children}</span>
+                          </li>
+                        ),
+                        strong: ({ children }) => <span style={{ fontWeight: 900 }}>{children}</span>,
+                      }}
+                    >
+                      {analysis.summary || "No summary available yet."}
+                    </ReactMarkdown>
+                  </div>
+
+                  <div style={{ height: 10 }} />
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <InfoRow label="Jurisdiction" value={analysis.jurisdiction || "UNKNOWN"} />
                     {(analysis as any)?.llm_model ? (
                       <InfoRow label="LLM model" value={String((analysis as any).llm_model)} />
                     ) : null}
-                  </div>
-
-                  <div style={{ height: 12 }} />
-
-                  <div style={{ fontSize: 12, fontWeight: 950 }}>Summary</div>
-
-                  <div
-                    style={{
-                      marginTop: 8,
-                      fontSize: 12,
-                      color: UI.text,
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    <ReactMarkdown
-                      components={{
-                        h2: ({ children }) => (
-                          <div style={{ marginTop: 10, fontSize: 13, fontWeight: 950 }}>
-                            {children}
-                          </div>
-                        ),
-                        h3: ({ children }) => (
-                          <div style={{ marginTop: 10, fontSize: 12, fontWeight: 900, color: UI.text }}>
-                            {children}
-                          </div>
-                        ),
-                        p: ({ children }) => (
-                          <div style={{ marginTop: 6, color: UI.text }}>
-                            {children}
-                          </div>
-                        ),
-                        ul: ({ children }) => (
-                          <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
-                            {children}
-                          </ul>
-                        ),
-                        li: ({ children }) => (
-                          <li style={{ marginBottom: 8, color: UI.text }}>
-                            <span style={{ color: UI.muted }}>{children}</span>
-                          </li>
-                        ),
-                        a: ({ children, href }) => (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: UI.blue, fontWeight: 850, textDecoration: "none" }}
-                          >
-                            {children}
-                          </a>
-                        ),
-                        strong: ({ children }) => (
-                          <strong style={{ color: UI.text, fontWeight: 950 }}>{children}</strong>
-                        ),
-                      }}
-                    >
-                      {analysis.summary || "No summary available yet."}
-                    </ReactMarkdown>
                   </div>
                 </>
               ) : null}
