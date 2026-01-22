@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 router = APIRouter()
 
 # -----------------------------
-# Helpers: URL / jurisdiction
+# URL / basics
 # -----------------------------
 def _domain_from_url(url: str) -> str:
     try:
@@ -16,17 +16,62 @@ def _domain_from_url(url: str) -> str:
     except Exception:
         return url
 
+def _normalize_ws(s: str) -> str:
+    return " ".join((s or "").strip().split())
+
+# -----------------------------
+# Contact extraction
+# -----------------------------
+_EMAIL_RE = re.compile(r"([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})")
+_PHONE_RE = re.compile(r"(?<!\d)(\+?\d[\d\s().-]{7,}\d)(?!\d)")
+_URL_RE = re.compile(r"(https?://[^\s)>\]]+)", re.IGNORECASE)
+
+def _extract_contacts(text: str) -> dict:
+    t = text or ""
+    emails = list(dict.fromkeys([e.lower() for e in _EMAIL_RE.findall(t)]))[:5]
+
+    phones_raw = _PHONE_RE.findall(t)
+    phones = []
+    for p in phones_raw:
+        p2 = _normalize_ws(p)
+        if len(re.sub(r"\D", "", p2)) >= 9:
+            phones.append(p2)
+    phones = list(dict.fromkeys(phones))[:4]
+
+    urls = list(dict.fromkeys(_URL_RE.findall(t)))[:6]
+
+    privacy_paths = []
+    for m in re.finditer(r"(?i)\b(/(privacy|contact|support|dpo|data-protection|legal)[^\s]*)", t):
+        privacy_paths.append(m.group(1))
+    privacy_paths = list(dict.fromkeys(privacy_paths))[:6]
+
+    return {
+        "emails": emails,
+        "phones": phones,
+        "urls": urls,
+        "paths": privacy_paths,
+    }
+
+# -----------------------------
+# Jurisdiction detection
+# -----------------------------
 def _detect_jurisdiction(text: str) -> str:
-    t = text.lower()
+    t = (text or "").lower()
     if "gdpr" in t or "european union" in t or "eea" in t:
         return "EU"
-    if "california consumer privacy act" in t or "ccpa" in t or "cpra" in t:
+    if "california consumer privacy act" in t or "ccpa" in t or "cpra" in t or "do not sell" in t:
         return "US-CA"
-    if "united kingdom" in t or "uk gdpr" in t:
+    if "united kingdom" in t or "uk gdpr" in t or "ico" in t:
         return "UK"
-    if "kenya" in t or "data protection act, 2019" in t or "office of the data protection commissioner" in t:
+    if (
+        "kenya" in t
+        or "data protection act, 2019" in t
+        or "data protection act 2019" in t
+        or "office of the data protection commissioner" in t
+        or "odpc" in t
+    ):
         return "KE"
-    if "south africa" in t or "popia" in t:
+    if "south africa" in t or "popia" in t or "information regulator" in t:
         return "ZA"
     if "brazil" in t or "lgpd" in t:
         return "BR"
@@ -35,23 +80,19 @@ def _detect_jurisdiction(text: str) -> str:
     return "UNKNOWN"
 
 # -----------------------------
-# Smarter sentence extraction
+# Sentence extraction + dedupe
 # -----------------------------
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
-def _normalize_ws(s: str) -> str:
-    return " ".join(s.strip().split())
-
 def _split_sentences(text: str) -> list[str]:
-    parts = _SENT_SPLIT.split(text)
+    parts = _SENT_SPLIT.split(text or "")
     out: list[str] = []
     for p in parts:
         s = _normalize_ws(p)
-        # keep "policy-like" lines; discard short noise
         if len(s) < 45:
             continue
-        # discard menu/footer-like junk
-        if s.lower().startswith(("cookie settings", "accept cookies", "all rights reserved")):
+        low = s.lower()
+        if low.startswith(("cookie settings", "accept cookies", "all rights reserved")):
             continue
         out.append(s)
     return out
@@ -64,13 +105,8 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return inter / union if union else 0.0
 
 def _dedupe_sentences(sents: list[str], sim_threshold: float = 0.72) -> list[str]:
-    """
-    Remove near-duplicates so evidence doesn't repeat across sections.
-    Cheap similarity: Jaccard overlap of word sets.
-    """
     kept: list[str] = []
     kept_sets: list[set[str]] = []
-
     for s in sents:
         ws = set(re.findall(r"[a-z0-9]+", s.lower()))
         duplicate = False
@@ -83,35 +119,134 @@ def _dedupe_sentences(sents: list[str], sim_threshold: float = 0.72) -> list[str
             kept_sets.append(ws)
     return kept
 
-def _find_evidence(text: str, keywords: list[str], max_items: int = 3) -> list[str]:
-    """
-    Topic-filtered evidence:
-    - Sentence must match at least one keyword (substring match)
-    - Pull from deduped sentence list
-    """
+def _find_evidence(text: str, keywords: list[str], max_items: int = 3, used: set[str] | None = None) -> list[str]:
+    used = used or set()
     sents = _dedupe_sentences(_split_sentences(text))
     out: list[str] = []
     for s in sents:
         sl = s.lower()
         if any(k in sl for k in keywords):
-            # keep it short for UI readability
-            s2 = s[:260] + ("…" if len(s) > 260 else "")
+            s2 = s[:280] + ("…" if len(s) > 280 else "")
+            if s2 in used:
+                continue
             out.append(s2)
+            used.add(s2)
         if len(out) >= max_items:
             break
     return out
+
+def _has_any(text: str, keywords: list[str]) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in keywords)
+
+# -----------------------------
+# Controller / Processor extraction
+# -----------------------------
+def _extract_controller_hint(text: str, fallback_domain: str) -> str | None:
+    sents = _split_sentences(text or "")
+    # strongest: "Data Controller: X"
+    for s in sents:
+        m = re.search(r"(?i)\bdata controller[:\s]\s*(.{3,120})", s)
+        if m:
+            val = _normalize_ws(m.group(1))
+            val = re.split(r"[.;\n]", val)[0].strip()
+            return val[:120]
+    # next: "This policy applies to X"
+    for s in sents:
+        m = re.search(r"(?i)\bthis policy applies to\s+(.{3,120})", s)
+        if m:
+            val = _normalize_ws(m.group(1))
+            val = re.split(r"[.;\n]", val)[0].strip()
+            return val[:120]
+    return fallback_domain or None
+
+# -----------------------------
+# Tiny structured extraction (rule-based)
+# -----------------------------
+def _extract_structured(text: str, url: str, jurisdiction: str, contacts: dict, controller_hint: str | None) -> dict:
+    t = (text or "").lower()
+
+    def yn(keys: list[str]) -> bool:
+        return _has_any(t, keys)
+
+    # rights signals (common)
+    rights = {
+        "access": yn(["right of access", "access your", "access to your", "access request", "data subject access"]),
+        "delete": yn(["delete", "erasure", "right to be forgotten", "deletion request"]),
+        "correct": yn(["correct", "correction", "rectify", "rectification"]),
+        "object": yn(["object", "objection", "right to object"]),
+        "portability": yn(["data portability", "portable"]),
+        "withdraw_consent": yn(["withdraw consent"]),
+        "opt_out_marketing": yn(["opt out", "opt-out", "unsubscribe", "marketing emails"]),
+    }
+
+    sharing = {
+        "third_parties": yn(["third party", "third-party", "share with", "shared with"]),
+        "service_providers": yn(["service provider", "vendor", "processor", "sub-processor"]),
+        "sale_of_data": yn(["sell personal", "selling personal", "do not sell"]),
+    }
+
+    retention = {
+        "mentions_retention": yn(["retain", "retention", "keep for", "as long as necessary"]),
+        "mentions_duration": yn(["for x years", "for a period", "until no longer", "as long as necessary"]),
+    }
+
+    tracking = {
+        "cookies_or_tracking": yn(["cookie", "tracking", "analytics", "pixel"]),
+        "ads_marketing": yn(["advertising", "marketing", "targeted ads", "personalized ads"]),
+    }
+
+    legal = {
+        "arbitration": yn(["arbitration"]),
+        "class_action_waiver": yn(["class action", "waive", "waiver"]),
+    }
+
+    cross_border = {
+        "international_transfers": yn(["international transfer", "cross-border", "outside", "other countries"]),
+        "safeguards": yn(["standard contractual clauses", "scc", "adequacy", "safeguards"]),
+    }
+
+    complaints = {
+        "mentions_supervisory_authority": yn(["supervisory authority", "lodge a complaint"]),
+        "mentions_odpc": yn(["odpc", "office of the data protection commissioner"]),
+    }
+
+    # Kenya checklist booleans (simple but useful for UI)
+    ke = {
+        "controller_identified": bool(controller_hint) or yn(["data controller", "controller", "data processor", "processor"]),
+        "contact_provided": bool(contacts.get("emails") or contacts.get("phones") or contacts.get("paths")) or yn(["contact", "privacy@", "dpo"]),
+        "rights_mentioned": any(rights.values()) or yn(["data subject"]),
+        "purpose_mentioned": yn(["purpose", "how we use", "we use", "for the purpose"]),
+        "retention_mentioned": retention["mentions_retention"],
+        "sharing_disclosed": sharing["third_parties"] or sharing["service_providers"],
+        "cross_border_mentioned": cross_border["international_transfers"],
+        "complaints_route": complaints["mentions_odpc"] or complaints["mentions_supervisory_authority"] or yn(["complaint"]),
+    }
+
+    return {
+        "site": _domain_from_url(url),
+        "jurisdiction": jurisdiction,
+        "controller_hint": controller_hint,
+        "contacts": {
+            "emails": contacts.get("emails", []),
+            "phones": contacts.get("phones", []),
+            "paths": contacts.get("paths", []),
+        },
+        "rights": rights,
+        "sharing": sharing,
+        "retention": retention,
+        "tracking": tracking,
+        "legal": legal,
+        "cross_border": cross_border,
+        "complaints": complaints,
+        "ke_checklist": ke if jurisdiction == "KE" else None,
+    }
 
 # -----------------------------
 # Risk model + flags
 # -----------------------------
 def _risk_and_flags(text: str) -> tuple[int, list[str], list[str]]:
-    """
-    Returns:
-      score (0-100),
-      red_flags (max 12),
-      concerns (a smaller list used for takeaways)
-    """
-    t = text.lower()
+    t = (text or "").lower()
     flags: list[str] = []
     concerns: list[str] = []
     score = 10
@@ -166,17 +301,17 @@ def _risk_level(score: int) -> str:
     return "LOW"
 
 # -----------------------------
-# Summary builder (v4)
+# Evidence sections
 # -----------------------------
 SECTIONS = [
-    ("Data collected", ["we collect", "information we collect", "personal information", "data we collect", "information you provide"]),
+    ("Data collected", ["we collect", "information we collect", "personal information", "data we collect", "information you provide", "categories of personal data"]),
     ("How data is used", ["how we use", "we use", "purpose", "to provide", "improve", "operate", "deliver", "process your"]),
     ("Sharing & third parties", ["share", "sharing", "third party", "third-party", "service provider", "vendors", "partners", "affiliates"]),
     ("Retention", ["retain", "retention", "keep", "storage duration", "as long as", "necessary"]),
-    ("Your rights & choices", ["your rights", "access", "delete", "erasure", "opt out", "opt-out", "rectify", "portability", "object"]),
+    ("Your rights & choices", ["your rights", "access", "delete", "erasure", "opt out", "opt-out", "rectify", "portability", "object", "withdraw consent"]),
     ("Security", ["security", "safeguard", "protect", "encryption", "access controls", "measures"]),
     ("International transfers", ["international", "transfer", "outside", "cross-border", "other countries"]),
-    ("Contact / complaints", ["contact", "email", "privacy@", "dpo", "data protection officer", "complaint", "supervisory authority"]),
+    ("Contact / complaints", ["contact", "email", "privacy@", "dpo", "data protection officer", "complaint", "supervisory authority", "odpc", "office of the data protection commissioner"]),
 ]
 
 def _mk_section(title: str, items: list[str]) -> str:
@@ -185,69 +320,123 @@ def _mk_section(title: str, items: list[str]) -> str:
     lines = "\n".join([f"- {x}" for x in items])
     return f"### {title}\n{lines}\n"
 
-def _coverage_map(text: str) -> tuple[dict[str, bool], int, list[str]]:
-    """
-    Returns:
-      section_has_evidence map,
-      coverage_percent,
-      missing_sections
-    """
-    has: dict[str, bool] = {}
+def _coverage_map(text: str) -> tuple[int, list[str]]:
     missing: list[str] = []
     present = 0
+    used = set()
     for title, keys in SECTIONS:
-        ev = _find_evidence(text, keys, max_items=1)
-        ok = bool(ev)
-        has[title] = ok
-        if ok:
+        ev = _find_evidence(text, keys, max_items=1, used=used)
+        if ev:
             present += 1
         else:
             missing.append(title)
     pct = int(round((present / len(SECTIONS)) * 100))
-    return has, pct, missing
+    return pct, missing
 
+# -----------------------------
+# Kenya-aware risk adjustment
+# -----------------------------
+def _kenya_risk_adjust(score: int, structured: dict) -> tuple[int, list[str]]:
+    extra: list[str] = []
+    add = 0
+
+    ke = structured.get("ke_checklist") or {}
+    if not ke:
+        return score, extra
+
+    if not ke.get("controller_identified"):
+        add += 10
+        extra.append("Kenya: Missing/unclear data controller identity.")
+    if not ke.get("contact_provided"):
+        add += 8
+        extra.append("Kenya: Missing/unclear privacy contact method.")
+    if not ke.get("rights_mentioned"):
+        add += 8
+        extra.append("Kenya: Missing/unclear data subject rights section.")
+    if not ke.get("purpose_mentioned"):
+        add += 6
+        extra.append("Kenya: Missing/unclear purpose of processing.")
+    if not ke.get("complaints_route"):
+        add += 5
+        extra.append("Kenya: No clear complaint route (ODPC or equivalent).")
+
+    new_score = max(0, min(100, score + add))
+    return new_score, extra[:5]
+
+# -----------------------------
+# Takeaways helper
+# -----------------------------
 def _action_for(level: str, red_flags: list[str]) -> str:
     l = level.upper()
     if l == "HIGH":
-        return "Avoid agreeing unless you must. If you proceed, use a throwaway email, deny optional permissions, and submit a delete/opt-out request."
+        return "Avoid agreeing unless necessary. If you proceed, minimize permissions and submit deletion/opt-out requests."
     if l == "MEDIUM":
-        return "Proceed with caution. Review opt-out controls, limit permissions, and check sharing/retention details before accepting."
-    # LOW
+        return "Proceed with caution. Review opt-out controls, sharing scope, and retention details before accepting."
     if any("third parties" in f.lower() for f in red_flags):
-        return "Looks generally low-risk, but still review third-party sharing scope and opt-out options."
-    return "Looks generally low-risk. Still confirm what’s collected and how to opt out of marketing/tracking."
+        return "Low risk overall, but verify third-party sharing scope and available opt-out controls."
+    return "Low risk overall. Still confirm what’s collected and how to opt out of marketing/tracking."
 
-def _build_summary(url: str, text: str, level: str, score: int, jurisdiction: str, red_flags: list[str], concerns: list[str]) -> str:
+# -----------------------------
+# Summary builder
+# -----------------------------
+def _build_summary(url: str, text: str, level: str, score: int, structured: dict, red_flags: list[str], concerns: list[str]) -> str:
     domain = _domain_from_url(url)
-    _, coverage_pct, missing = _coverage_map(text)
+    coverage_pct, missing_sections = _coverage_map(text)
 
-    # Evidence per section (topic filtered + deduped)
-    evidence_blocks: list[str] = []
-    for title, keys in SECTIONS:
-        ev = _find_evidence(text, keys, max_items=3)
-        evidence_blocks.append(_mk_section(title, ev))
+    controller_hint = structured.get("controller_hint")
+    contacts = structured.get("contacts") or {}
+    ke = structured.get("ke_checklist")
 
     top_concern = concerns[0] if concerns else (red_flags[0] if red_flags else "No major issues detected in the scanned text.")
-    missing_line = ", ".join([f"**{m}**" for m in missing[:4]]) + ("…" if len(missing) > 4 else "")
+    missing_line = ", ".join([f"**{m}**" for m in missing_sections[:4]]) + ("…" if len(missing_sections) > 4 else "")
     action = _action_for(level, red_flags)
+
+    contact_hint_line = None
+    parts = []
+    if contacts.get("emails"):
+        parts.append("email: " + ", ".join(contacts["emails"]))
+    if contacts.get("phones"):
+        parts.append("phone: " + ", ".join(contacts["phones"]))
+    if contacts.get("paths"):
+        parts.append("link: " + ", ".join(contacts["paths"]))
+    if parts:
+        contact_hint_line = " | ".join(parts)
 
     takeaways = []
     takeaways.append(f"- Risk level: **{level}** (score **{score}/100**)")
-    takeaways.append(f"- Jurisdiction signals: **{jurisdiction}**")
+    takeaways.append(f"- Jurisdiction signals: **{structured.get('jurisdiction')}**")
     takeaways.append(f"- Coverage: **{coverage_pct}%** of key topics detected")
-    if missing:
+    if missing_sections:
         takeaways.append(f"- Missing/unclear: {missing_line}")
     takeaways.append(f"- Top concern: {top_concern}")
+    if controller_hint:
+        takeaways.append(f"- Likely controller/org: **{controller_hint}**")
+    if contact_hint_line:
+        takeaways.append(f"- Contact hints: {contact_hint_line}")
     takeaways.append(f"- Action: {action}")
+
+    # Evidence (global de-dupe)
+    used = set()
+    evidence_blocks: list[str] = []
+    for title, keys in SECTIONS:
+        ev = _find_evidence(text, keys, max_items=3, used=used)
+        evidence_blocks.append(_mk_section(title, ev))
 
     summary = []
     summary.append("## Policy Summary")
     summary.append(f"**Site:** {domain}\n")
     summary.append("### Key takeaways")
     summary.append("\n".join(takeaways))
+
+    if ke:
+        summary.append("\n### Kenya checklist")
+        summary.append("- ✅/❌ based on what was detected in the first 20k characters.")
+        for k, v in ke.items():
+            label = k.replace("_", " ").capitalize()
+            summary.append(f"- {'✅' if v else '❌'} {label}")
+
     summary.append("\n### Evidence by section\n")
     summary.append("\n".join(evidence_blocks))
-
     return "\n".join(summary).strip()
 
 # -----------------------------
@@ -262,10 +451,24 @@ async def analyze_policy(request: Request, payload: dict, _plan=Depends(require_
     domain = _domain_from_url(url)
     jurisdiction = _detect_jurisdiction(text)
 
-    score, red_flags, concerns = _risk_and_flags(text)
-    level = _risk_level(score)
+    contacts = _extract_contacts(text)
+    controller_hint = _extract_controller_hint(text, domain)
 
-    summary_md = _build_summary(url, text, level, score, jurisdiction, red_flags, concerns)
+    # structured extraction first (so we can use it in scoring + UI)
+    structured = _extract_structured(text, url, jurisdiction, contacts, controller_hint)
+
+    score, red_flags, concerns = _risk_and_flags(text)
+
+    # Kenya: adjust risk upward when essentials are missing
+    if jurisdiction == "KE":
+        score, extra_ke_flags = _kenya_risk_adjust(score, structured)
+        for f in extra_ke_flags:
+            if f not in red_flags:
+                red_flags.append(f)
+        red_flags = red_flags[:12]
+
+    level = _risk_level(score)
+    summary_md = _build_summary(url, text, level, score, structured, red_flags, concerns)
 
     return {
         "risk_level": level,
@@ -274,5 +477,6 @@ async def analyze_policy(request: Request, payload: dict, _plan=Depends(require_
         "red_flags": red_flags,
         "jurisdiction": jurisdiction,
         "service_name": domain,
-        "llm_model": "heuristics-sections-v4",
+        "llm_model": "heuristics-sections-v8-structured",
+        "structured": structured,  # ✅ new: rule-based JSON extraction
     }
