@@ -1,21 +1,54 @@
+import os
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Plan:
     name: str
-    display_name: str
-    daily_limit: int
-    upgrade_hint: str
 
-# Minimal default plan (safe)
-FREE = Plan(
-    name="free",
-    display_name="Free",
-    daily_limit=30,
-    upgrade_hint="Upgrade to increase your daily limit."
-)
+FREE = Plan("free")
+PRO = Plan("pro")
+BUSINESS = Plan("business")
 
-# Very simple resolver (you can improve later)
+def _norm(s: str | None) -> str:
+    return (s or "").strip()
+
+def _configured_keys() -> dict[str, str]:
+    """
+    Reads API keys from environment.
+    If none are set, dict will be empty.
+    """
+    keys = {
+        "master": _norm(os.getenv("DL_API_KEY")),
+        "free": _norm(os.getenv("DL_API_KEY_FREE")),
+        "pro": _norm(os.getenv("DL_API_KEY_PRO")),
+        "business": _norm(os.getenv("DL_API_KEY_BUSINESS")),
+    }
+    return {k: v for k, v in keys.items() if v}
+
 def resolve_plan_from_api_key(api_key: str) -> Plan:
-    # If you later add a DB lookup or env-based plans, do it here.
-    return FREE
+    """
+    Behavior:
+    - If NO DL_API_KEY* env vars are configured => accept any non-empty key (local-dev friendly).
+    - If keys ARE configured => strict match.
+    """
+    key = _norm(api_key)
+    if not key:
+        raise ValueError("Missing API key")
+
+    configured = _configured_keys()
+
+    # Local dev fallback: no keys configured => accept any key
+    if not configured:
+        return FREE
+
+    # Strict matching when configured
+    if key == configured.get("master"):
+        return BUSINESS
+    if key == configured.get("business"):
+        return BUSINESS
+    if key == configured.get("pro"):
+        return PRO
+    if key == configured.get("free"):
+        return FREE
+
+    raise ValueError("Invalid API key")

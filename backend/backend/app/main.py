@@ -1,7 +1,10 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api import policies
+from backend.app.api import billing
+from backend.app.core.usage import UsageEnforcerMiddleware
 
 app = FastAPI(
     title="Data Lawyer API",
@@ -9,10 +12,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS:
-# - For production, set ALLOWED_ORIGINS env var on Render (comma-separated).
-# - Default "*" is fine for local dev, but tighten in prod.
-import os
 origins_env = os.getenv("ALLOWED_ORIGINS", "*").strip()
 allow_origins = ["*"] if origins_env == "*" else [o.strip() for o in origins_env.split(",") if o.strip()]
 
@@ -24,7 +23,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Daily quota enforcement for protected endpoints
+app.add_middleware(UsageEnforcerMiddleware, protected_prefixes=["/policies"])
+
 app.include_router(policies.router, prefix="/policies", tags=["Policy Analysis"])
+app.include_router(billing.router, prefix="/billing", tags=["Billing"])
 
 @app.get("/health")
 def health():
