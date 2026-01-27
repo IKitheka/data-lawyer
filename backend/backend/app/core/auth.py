@@ -1,30 +1,24 @@
-import hashlib
-from fastapi import Header, HTTPException, Depends, Request
-from sqlalchemy.orm import Session
+from __future__ import annotations
 
-from backend.app.db import get_db
-from backend.app.models import ApiKey
+from fastapi import Header, HTTPException, Request
+from backend.app.core.plans import resolve_plan_from_api_key, Plan
 
-def _hash_key(raw: str) -> str:
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 def require_api_key(
     request: Request,
     x_api_key: str = Header(default="", alias="X-API-Key"),
-    db: Session = Depends(get_db),
-):
-    raw = (x_api_key or "").strip()
-    if not raw:
+) -> Plan:
+    api_key = (x_api_key or "").strip()
+    if not api_key:
         raise HTTPException(status_code=401, detail="Missing API key")
 
-    key_hash = _hash_key(raw)
-
-    row = db.query(ApiKey).filter(ApiKey.key_hash == key_hash, ApiKey.is_active == True).first()
-    if not row:
+    try:
+        plan = resolve_plan_from_api_key(api_key)
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # attach for limiter + usage middleware
-    request.state.api_key = row
-    request.state.plan = row.plan
-
-    return row
+    # Make available to handlers + limiter dependency
+    request.state.api_key = api_key
+    request.state.plan = plan.name
+    request.state.rpm = plan.rpm
+    return plan

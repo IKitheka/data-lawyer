@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 import os
 
 from backend.app.api import policies
@@ -10,9 +12,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS:
-# - For production, set ALLOWED_ORIGINS env var (comma-separated)
-# - "*" is fine for local dev; tighten in prod
+# CORS
 origins_env = os.getenv("ALLOWED_ORIGINS", "*").strip()
 allow_origins = ["*"] if origins_env == "*" else [o.strip() for o in origins_env.split(",") if o.strip()]
 
@@ -24,7 +24,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Only policies router for now (no Stripe/billing)
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request, exc):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded. Try again later."},
+    )
+
 app.include_router(policies.router, prefix="/policies", tags=["Policy Analysis"])
 
 @app.get("/health")
