@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
-from backend.app.core.limiter import enforce_rate_limit, rate_key_from_request
+from backend.app.core.limiter import check_rate_limit
 from backend.app.core.auth import require_api_key
 from backend.app.api.schemas import AnalyzeRequest
 
@@ -746,12 +746,23 @@ def _build_summary(url: str, text: str, structured: dict, score: int, level: str
 # ============================================================
 
 @router.post("/analyze")
-async def analyze_policy(
-    request: Request,
-    payload: dict,
-    plan=Depends(require_api_key),
-    _rl=Depends(enforce_rate_limit),
-):
+async def analyze_policy(request: Request, payload: dict, plan=Depends(require_api_key)):
+    # ---------- Plan-based rate limiting ----------
+    api_key = getattr(request.state, "api_key", None) or "anon"
+    rpm = getattr(plan, "rpm", "30/minute")
+
+    allowed, meta = check_rate_limit(api_key, rpm)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Rate limit exceeded",
+                "limit_per_minute": meta.limit,
+                "reset_seconds": meta.reset_seconds,
+                "remaining": meta.remaining,
+            },
+        )
+
     # ---------- Core analysis ----------
     url = str(payload.get("url") or "")
     text = str(payload.get("text") or "")[:20000]
@@ -785,3 +796,4 @@ async def analyze_policy(
         "llm_model": "heuristics-compliance-v3-fast",
         "structured": structured,
     }
+
