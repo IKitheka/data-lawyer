@@ -1,98 +1,70 @@
 from __future__ import annotations
-
 import os
+import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple
 
-from fastapi import HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from limits.storage import RedisStorage
+from limits import parse
+from limits.storage import storage_from_string
 
+# -------------------------
+# Storage (Redis in prod, memory locally)
+# -------------------------
+def _storage_uri() -> str:
+    # Use Upstash on Render:
+    # Example: rediss://default:xxxxx@xxxxx.upstash.io:6379
+    uri = (os.getenv("REDIS_URL") or os.getenv("UPSTASH_REDIS_URL") or "").strip()
+    if uri:
+        return uri
 
-# ----------------------------
-# Key function (stable on Render/Cloudflare)
-# ----------------------------
-def rate_key_from_request(request: Request) -> str:
-    api_key = (request.headers.get("x-api-key") or "").strip()
-    if api_key:
-        return f"key:{api_key}"
+    # Local fallback
+    return "memory://"
 
-    client_id = (request.headers.get("x-client-id") or "").strip()
-    if client_id:
-        return f"cid:{client_id}"
+_storage = storage_from_string(_storage_uri())
 
-    return f"ip:{get_remote_address(request)}"
-
-
-# ----------------------------
-# Storage (Redis if configured, else in-memory fallback)
-# ----------------------------
-def _build_storage() -> Optional[RedisStorage]:
-    """
-    Upstash redis urls look like:
-      rediss://default:<password>@<host>:6379
-    We'll use it if REDIS_URL is set; otherwise fallback to in-memory
-    (fine for local dev, NOT for production multi-instance).
-    """
-    redis_url = (os.getenv("REDIS_URL") or "").strip()
-    if not redis_url:
-        return None
-    return RedisStorage(redis_url)
-
-
-_storage = _build_storage()
-
-# IMPORTANT:
-# In slowapi 0.1.9, Limiter() does NOT accept 'storage=' kwarg.
-# Instead, we set storage_uri via env var or let it use memory.
-#
-# But we *can* force storage by setting LIMITS_STORAGE_URL env var,
-# which 'limits' library picks up. We'll do that if REDIS_URL exists.
-if _storage is not None:
-    os.environ["LIMITS_STORAGE_URL"] = (os.getenv("REDIS_URL") or "").strip()
-
-
-limiter = Limiter(key_func=rate_key_from_request)
-
-
-# ----------------------------
-# Response metadata for our own "manual" callers (optional)
-# ----------------------------
-@dataclass(frozen=True)
-class RateLimitMeta:
+# -------------------------
+# Public API
+# -------------------------
+@dataclass
+class LimitMeta:
     limit: str
     reset_seconds: int
 
+def rate_key_from_request(api_key: str, client_id: str | None = None) -> str:
+    # Prefer API key as the primary limiter key
+    api_key = (api_key or "").strip()
+    if api_key:
+        return f"key:{api_key}"
 
-# ----------------------------
-# Dependency: enforce rate limit per plan
-# ----------------------------
-async def enforce_rate_limit(request: Request) -> None:
+    cid = (client_id or "").strip()
+    if cid:
+        return f"cid:{cid}"
+
+    return "anon"
+
+def check_rate_limit(key: str, limit: str) -> Tuple[bool, LimitMeta]:
     """
-    This dependency applies a limit to the current request using slowapi.
-    It must run AFTER require_api_key (so request.state.plan exists).
+    limit examples:
+      "30/minute"
+      "120/minute"
+      "600/minute"
     """
-    # plan rpm is stored by auth.py; default is safe
-    limit_value = getattr(request.state, "rpm", None) or "30/minute"
+    limit = (limit or "30/minute").strip()
+    item = parse(limit)
 
-    # slowapi needs a function that includes `request`
-    async def _noop(request: Request) -> None:
-        return None
+    # Use a fixed window counter (simple + stable)
+    # "hit" returns True if allowed
+    allowed = _storage.hit(item, key)
 
-    # decorate and execute
-    wrapped = limiter.limit(limit_value)(_noop)
-    await wrapped(request)
+    # reset time: best-effort estimation using window size
+    now = int(time.time())
+    window = int(getattr(item, "GRANULARITY", 60))  # fallback
+    # limits.parse returns RateLimitItem with per-second granularity.
+    # We'll calculate reset using the expiry time we set.
+    reset_seconds = 60
+    try:
+        reset_seconds = max(1, _storage.get_expiry(key) - now)
+    except Exception:
+        reset_seconds = 60
 
-
-# ----------------------------
-# Optional manual limiter (if you want to call it yourself)
-# ----------------------------
-def check_rate_limit(identity: str, limit_value: str) -> Tuple[bool, RateLimitMeta]:
-    """
-    Manual check helper if you ever need it.
-    For now, you are using enforce_rate_limit() dependency instead.
-    """
-    # We can't easily query reset time with slowapi in a portable way here.
-    # Return meta with limit and a placeholder reset.
-    return True, RateLimitMeta(limit=limit_value, reset_seconds=60)
+    return allowed, LimitMeta(limit=limit, reset_seconds=reset_seconds)
