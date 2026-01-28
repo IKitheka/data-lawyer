@@ -1,5 +1,5 @@
 // src/api/client.ts
-const API_BASE = "https://data-lawyer.onrender.com";
+import { API_BASE } from "../config/api";
 
 const KEY_STORAGE = "DL_API_KEY";
 const CLIENT_ID_KEY = "dl_client_id";
@@ -23,10 +23,7 @@ async function getApiKey(): Promise<string> {
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}) {
-  const [clientId, apiKey] = await Promise.all([
-    getClientId(),
-    getApiKey(),
-  ]);
+  const [clientId, apiKey] = await Promise.all([getClientId(), getApiKey()]);
 
   if (!apiKey) {
     throw new Error("Missing API key (DL_API_KEY)");
@@ -39,3 +36,5 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
 
   return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
+
+  
