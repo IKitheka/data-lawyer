@@ -1,4 +1,3 @@
-// src/api/client.ts
 import { API_BASE } from "../config/api";
 
 const KEY_STORAGE = "DL_API_KEY";
@@ -17,17 +16,24 @@ async function getClientId(): Promise<string> {
   return id;
 }
 
+// Public beta key (free tier)
 async function getApiKey(): Promise<string> {
   const res = await chrome.storage.local.get([KEY_STORAGE]);
-  return String(res?.[KEY_STORAGE] || "").trim();
+
+  // auto inject public beta key if missing
+  if (!res?.[KEY_STORAGE]) {
+    const beta = "dl_public_beta_2026";
+    await chrome.storage.local.set({ [KEY_STORAGE]: beta });
+    return beta;
+  }
+
+  return String(res[KEY_STORAGE]).trim();
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}) {
   const [clientId, apiKey] = await Promise.all([getClientId(), getApiKey()]);
 
-  if (!apiKey) {
-    throw new Error("Missing API key (DL_API_KEY)");
-  }
+  if (!apiKey) throw new Error("Missing API key (public beta key not set)");
 
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "application/json");
@@ -36,5 +42,3 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
 
   return fetch(`${API_BASE}${path}`, { ...init, headers });
 }
-
-  
