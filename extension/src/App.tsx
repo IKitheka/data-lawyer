@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PolicyAnalysis } from "./types";
 import ReactMarkdown from "react-markdown";
+import { jsPDF } from "jspdf";
+
+
 
 
 type Stored = {
@@ -238,6 +241,113 @@ export default function App() {
       ta.remove();
     }
   }
+
+function mdToText(md: string) {
+  return (md || "")
+    // remove markdown headings
+    .replace(/^#{1,6}\s+/gm, "")
+    // bullets
+    .replace(/^\s*[-*+]\s+/gm, "• ")
+    // numbered list
+    .replace(/^\s*\d+\.\s+/gm, "• ")
+    // bold/italics/code
+    .replace(/[`*_]/g, "")
+    // links [text](url) -> text (url)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
+    .trim();
+}
+
+function safeFilename(s: string) {
+  return (s || "data-lawyer-report")
+    .toLowerCase()
+    .replace(/https?:\/\//g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function exportPdf() {
+  if (!analysis) return;
+
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = margin;
+
+  const title = "Data Lawyer Report";
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text(title, margin, y);
+  y += 20;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  const generatedAt =
+    (analysis as any)?.saved_at ? String((analysis as any).saved_at) : new Date().toISOString();
+  doc.text(`Generated: ${generatedAt}`, margin, y);
+  y += 18;
+
+  // Divider
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageW - margin, y);
+  y += 14;
+
+  const addBlock = (label: string, value: string) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(label, margin, y);
+    y += 14;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+
+    const lines = doc.splitTextToSize(value || "—", pageW - margin * 2);
+    for (const line of lines) {
+      if (y > pageH - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(line, margin, y);
+      y += 14;
+    }
+    y += 8;
+  };
+
+  addBlock("Website", String(analysis.service_name || "—"));
+  addBlock("URL", String(analysis.url || "—"));
+  addBlock("Risk", `${String(analysis.risk_level || "UNKNOWN").toUpperCase()}  |  Score: ${analysis.risk_score ?? "—"}`);
+  addBlock("Jurisdiction", String(analysis.jurisdiction || "UNKNOWN"));
+
+  if (analysis.red_flags?.length) {
+    addBlock(
+      "Top red flags",
+      analysis.red_flags.slice(0, 12).map((f) => `• ${f}`).join("\n")
+    );
+  } else {
+    addBlock("Top red flags", "None detected.");
+  }
+
+  addBlock("Summary", mdToText(String(analysis.summary || "No summary available.")));
+
+  // footer on each page (simple)
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(
+      `Data Lawyer • Page ${i} of ${totalPages}`,
+      margin,
+      pageH - 18
+    );
+  }
+
+  const domainOrName = String(analysis.service_name || analysis.url || "report");
+  doc.save(`${safeFilename(domainOrName)}-data-lawyer-report.pdf`);
+}
+
 
   function clear() {
     chrome.storage.local.remove(["latestAnalysis"], () => {
@@ -552,6 +662,11 @@ export default function App() {
               <button onClick={copySummary} style={{ ...buttonPrimary(false), flex: 1 }}>
                 Copy summary
               </button>
+             
+              <button onClick={exportPdf} disabled={!analysis} style={buttonGhost(!analysis)}>
+                Export PDF
+              </button>
+   
 
               <button onClick={openPolicy} disabled={!analysis.url} style={buttonGhost(!analysis.url)}>
                 Open
@@ -567,7 +682,7 @@ export default function App() {
 
       <div style={{ height: 10 }} />
       <div style={{ fontSize: 11, color: UI.faint }}>
-        Tip: keep backend running on <b style={{ color: UI.text }}>127.0.0.1:8000</b>.
+        Tip: using the production API at <b style={{ color: UI.text }}>data-lawyer.onrender.com</b>.
       </div>
     </div>
   );
