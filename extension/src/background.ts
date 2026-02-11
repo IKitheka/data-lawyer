@@ -37,6 +37,13 @@ function normUrl(url: string) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Open the full report UI (extension page)
+  if (msg?.type === "OPEN_REPORT") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("index.html") });
+    sendResponse?.({ ok: true });
+    return true;
+  }
+
   if (msg?.type !== "ANALYZE_POLICY") return;
 
   (async () => {
@@ -130,6 +137,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         policySnapshots,
         changeLog,
       });
+
+      // Notify the page to show the small score toast
+      if (tabId >= 0) {
+        chrome.tabs.sendMessage(tabId, {
+          type: "DL_ANALYSIS_DONE",
+          url,
+          risk_score: latestAnalysis.risk_score,
+          risk_level: latestAnalysis.risk_level,
+          service_name: latestAnalysis.service_name,
+        });
+      }
+      
+
 
       sendResponse({ ok: true, data: latestAnalysis });
     } catch (e: any) {

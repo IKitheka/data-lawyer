@@ -1,76 +1,132 @@
-function isPolicyPage(url: string, text: string) {
-  const u = (url || "").toLowerCase();
-  const t = (text || "").toLowerCase();
-  return (
-    u.includes("privacy") ||
-    u.includes("terms") ||
-    u.includes("policy") ||
-    t.includes("privacy policy") ||
-    t.includes("terms of service")
-  );
+/* Auto-detect policy/terms pages + auto-analyze (MV3 content script) */
+
+type AnalyzeMsg = {
+  type: "ANALYZE_POLICY";
+  url: string;
+  text: string;
+  title?: string;
+  service_name?: string;
+};
+
+const MAX_CHARS = 20000;
+
+// URL patterns that usually mean policy/terms pages
+const POLICY_URL_RE =
+  /(privacy|privacy-policy|terms|terms-of-service|legal|data-policy|cookies|cookie-policy|gdpr|ccpa|cpra|compliance)/i;
+
+// Extra safety: require at least some legal/privacy keywords in page text
+const KEYWORD_RE =
+  /(personal data|privacy policy|terms of service|data protection|cookies|third parties|retain|retention|gdpr|ccpa|your rights|opt[- ]out|controller|processor)/i;
+
+function getCleanText(): string {
+  const root = document.body;
+  if (!root) return "";
+  const txt = (root.innerText || "").replace(/\s+/g, " ").trim();
+  return txt.slice(0, MAX_CHARS);
 }
 
-const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-const LAST_RUN_KEY = "dl_last_run_ts";
+function isLikelyPolicyPage(url: string, text: string): boolean {
+  if (!POLICY_URL_RE.test(url)) return false;
+  return KEYWORD_RE.test(text) || text.length > 1500;
+}
 
-async function getLastRun(): Promise<number> {
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+let scheduled = false;
+
+async function alreadyAnalyzed(url: string, text: string): Promise<boolean> {
   try {
-    const res = await chrome.storage.local.get([LAST_RUN_KEY]);
-    const v = res?.[LAST_RUN_KEY];
-    return typeof v === "number" ? v : 0;
+    const hash = await sha256Hex(text);
+    const key = `dl_auto_${new URL(url).hostname}`;
+    const res = await chrome.storage.local.get([key]);
+    if (res?.[key] === hash) return true;
+    await chrome.storage.local.set({ [key]: hash });
+    return false;
   } catch {
-    return 0;
+    return false;
   }
 }
 
-async function setLastRun(ts: number) {
+async function runAnalysis(): Promise<void> {
   try {
-    await chrome.storage.local.set({ [LAST_RUN_KEY]: ts });
-  } catch {}
-}
+    const url = location.href;
+    const title = document.title || undefined;
+    const text = getCleanText();
 
-async function run(force = false) {
-  const url = window.location.href;
-  const text = (document.body?.innerText || "").slice(0, 20000);
+    if (!isLikelyPolicyPage(url, text)) return;
+    if (await alreadyAnalyzed(url, text)) return;
 
-  if (!force && !isPolicyPage(url, text)) return;
+    const msg: AnalyzeMsg = {
+      type: "ANALYZE_POLICY",
+      url,
+      text,
+      title,
+      service_name: new URL(url).hostname,
+    };
 
-  const now = Date.now();
-  const last = await getLastRun();
-  if (!force && now - last < COOLDOWN_MS) {
-    console.log("[Data Lawyer] cooldown: skipping auto analyze");
-    return;
+    chrome.runtime.sendMessage(msg, () => {
+      // keep quiet in production
+    });
+  } catch {
+    // ignore
   }
-  await setLastRun(now);
-
-  chrome.runtime.sendMessage(
-    { type: "ANALYZE_POLICY", url, text, title: document.title },
-    (resp) => {
-      if (chrome.runtime.lastError) {
-        console.error("[Data Lawyer] runtime error:", chrome.runtime.lastError.message);
-        return;
-      }
-      if (!resp?.ok) {
-        console.error("[Data Lawyer] Analyze failed:", resp?.error);
-        return;
-      }
-      console.log("[Data Lawyer] Analysis saved:", resp.data);
-    }
-  );
 }
 
-run(false);
+function scheduleAuto(): void {
+  if (scheduled) return;
+  scheduled = true;
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  setTimeout(async () => {
+    scheduled = false;
+    await runAnalysis();
+  }, 1200);
+}
+
+function hookHistory(): void {
+  const _pushState = history.pushState;
+  const _replaceState = history.replaceState;
+
+  history.pushState = function (...args: any[]) {
+    // @ts-ignore
+    _pushState.apply(this, args);
+    scheduleAuto();
+  } as any;
+
+  history.replaceState = function (...args: any[]) {
+    // @ts-ignore
+    _replaceState.apply(this, args);
+    scheduleAuto();
+  } as any;
+
+  window.addEventListener("popstate", () => scheduleAuto());
+}
+
+// Keep your existing popup flow working
+chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   if (msg?.type === "PING") {
     sendResponse({ ok: true });
-    return;
+    return true;
   }
 
   if (msg?.type === "FORCE_ANALYZE") {
-    run(true)
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    scheduleAuto();
+    sendResponse({ ok: true });
     return true;
   }
+
+  return false;
 });
+
+// Init
+hookHistory();
+if (document.readyState === "complete" || document.readyState === "interactive") {
+  scheduleAuto();
+} else {
+  window.addEventListener("DOMContentLoaded", () => scheduleAuto(), { once: true });
+}
