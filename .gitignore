@@ -208,3 +208,11 @@ __marimo__/
 .env
 .venv
 backend/data_lawyer.db
+
+# --- secrets & junk ---
+.env
+.env.*
+!.env.example
+*.bak
+*.pem
+*.key
