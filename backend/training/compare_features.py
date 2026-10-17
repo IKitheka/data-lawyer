@@ -107,7 +107,7 @@ def main():
     evalsets = {"policyie_test": test, "probe": probe}
     enc = get_encoder(a.encoder)
     print(f"{'config':22s} {'PolicyIE macroF1':>17s} {'probe macroF1':>14s} {'probe microF1':>14s}")
-    for alpha in ([1] if not enc else [1, 2, 4]):
+    for alpha in ([1] if not enc else [0.25, 0.5, 1]):
         o = run(enc, alpha, tr, val, evalsets)
         name = "tfidf only" if not enc else f"tfidf + {a.encoder} x{alpha}"
         print(f"{name:22s} {o['policyie_test'][0]:17.3f} {o['probe'][0]:14.3f} {o['probe'][1]:14.3f}")

@@ -31,6 +31,8 @@ def _legacy_lookup(label: str, legacy: Dict[str, Any], contacts: Dict[str, List[
         "supervisory_authority": g("complaints", "mentions_supervisory_authority"),
         "contact": bool(contacts.get("emails") or contacts.get("phones") or contacts.get("paths")),
         "arbitration_waiver": "arbitration" in tl or "class action" in tl,
+        "retention_period": g("retention", "mentions_duration"),
+        "retention_vague": g("retention", "mentions_retention") and not g("retention", "mentions_duration"),
         "policy_change_no_notice": "without notice" in tl and ("change" in tl or "update" in tl),
     }
     return bool(table.get(label, False))
@@ -46,7 +48,10 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
 
     def has(l: str) -> bool:
         if l in covered:
-            return any(l in c["labels"] for c in clauses)
+            hit = any(l in c["labels"] for c in clauses)
+            if l == "contact":  # an email/phone/contact page in the text is a fact, not a classifier guess
+                hit = hit or bool(contacts.get("emails") or contacts.get("phones") or contacts.get("paths"))
+            return hit
         fallback_used.add(l)
         return _legacy_lookup(l, legacy, contacts, tl)
 

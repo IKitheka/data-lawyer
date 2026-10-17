@@ -81,6 +81,24 @@ def prf(y, p, thr):
     return a, b, c
 
 
+STATUS_FILE = Path("ml_data/label_status.json")
+
+
+def reliable_labels(clfs, rows):
+    """A label is trusted by the API with >= MIN_RELIABLE_POS real examples, or when label_status.json
+    records measured evidence that the model beats the old keywords for it (use_model)."""
+    status = json.loads(STATUS_FILE.read_text(encoding="utf-8")) if STATUS_FILE.exists() else {}
+    force_model, force_kw = set(status.get("use_model", [])), set(status.get("use_keywords", []))
+    out = []
+    for l in clfs:
+        n = sum(1 for r in rows if l in r["labels"] and r["source"] != "seed_v0")
+        if l in force_kw:
+            continue
+        if n >= MIN_RELIABLE_POS or l in force_model:
+            out.append(l)
+    return sorted(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--licenses", default="", help="comma list of allowed licenses (default: all)")
@@ -144,10 +162,7 @@ def main():
             "classifiers": clfs,
             "thresholds": thresholds,
             "trained_on": len(final_rows),
-            "reliable": sorted(
-                l for l in clfs
-                if sum(1 for r in final_rows if l in r["labels"] and r["source"] != "seed_v0") >= MIN_RELIABLE_POS
-            ),
+            "reliable": reliable_labels(clfs, final_rows),
             "licenses": sorted(allowed) or "all",
         },
         ARTIFACT,
