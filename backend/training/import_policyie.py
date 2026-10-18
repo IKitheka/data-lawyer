@@ -27,16 +27,24 @@ SCOPE = ["collection", "share_third_party", "retention_period", "retention_vague
 # (e.g. "you can disable cookies" has no event, so it is labelled negative). Treated as weak.
 WEAK_SCOPE = ["purpose", "advertising", "tracking"]
 
+# PolicyIE tags ANY retention span as a "period", but ~70% are open-ended ("as long as needed", "a reasonable
+# period of time", "indefinitely"). Our definition: retention_period = a definite duration or a clear criterion
+# the user controls; everything else is retention_vague. We decide from the annotated span text itself.
+CONCRETE = re.compile(
+    r"\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|twelve|thirty|sixty|ninety|a|an)\b[\s-]+(day|week|month|year)s?"
+    r"|\buntil\b|\bimmediately\b|\bas long as (you|your)\b|account is active|\bdeletes? (their|your|the) (own )?account"
+)
+
 
 def parse_ann(path):
     ents, events = {}, []
     for line in open(path, encoding="utf-8"):
         line = line.rstrip("\n")
         if line.startswith("T"):
-            tid, meta, *_ = line.split("\t")
+            tid, meta, *tail = line.split("\t")
             typ, rest = meta.split(" ", 1)
             start = int(re.split(r"[ ;]", rest)[0])
-            ents[tid] = (typ, start)
+            ents[tid] = (typ, start, tail[0].strip().lower() if tail else "")
         elif line.startswith("E"):
             _, body = line.split("\t", 1)
             parts = body.split()
@@ -68,6 +76,11 @@ def main():
     ap.add_argument("--out", default="ml_data/annotations/policyie.jsonl")
     a = ap.parse_args()
 
+    n_ann = len(glob.glob(os.path.join(a.src, "**", "*.ann"), recursive=True))
+    if n_ann == 0:
+        raise SystemExit(f"No .ann files found under {a.src}. Nothing was written (your existing data is untouched).\n"
+                         "Check the path: it should contain the 'train' and 'test' folders.")
+
     stats, rows, seen = Counter(), [], set()
     for split in ("train", "test"):
         for ann in sorted(glob.glob(os.path.join(a.src, split, "**", "*.ann"), recursive=True)):
@@ -88,7 +101,8 @@ def main():
                     if etype in EVENT_LABEL:
                         labels.add(EVENT_LABEL[etype])
                     elif etype == "data-storage-retention-deletion":
-                        labels.add("retention_period" if "Retention-Period" in argnames else "retention_vague")
+                        spans = [ents[t][2] for n, t in args if n.startswith("Retention-Period") and t in ents]
+                        labels.add("retention_period" if any(CONCRETE.search(x) for x in spans) else "retention_vague")
                     if any(n.startswith("Purpose-Argument") for n in argnames):
                         labels.add("purpose")
                     for n, t in args:
@@ -112,6 +126,8 @@ def main():
                 for l in labels:
                     stats[f"label:{l}"] += 1
 
+    if not rows:
+        raise SystemExit("Parsed 0 rows, so nothing was written (your existing data is untouched).")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w", encoding="utf-8") as f:
         for r in rows:

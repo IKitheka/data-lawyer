@@ -10,6 +10,7 @@ Usage (from backend/):
 import contextlib
 import io
 import random
+import sys
 
 import numpy as np
 
@@ -38,12 +39,20 @@ def main():
     rows = T.load_rows(set())
     own = [r for r in rows if r["source"] != "policyie" and "scope" not in r]
     other = [r for r in rows if r["source"] == "policyie"]
-    print(f"{len(own)} own rows, scored by 5-fold cross-validation (about a minute)...\n")
+    by_policy = "--by-policy" in sys.argv
+    mode = "leave-one-policy-out (each policy predicted by a model that never saw ANY of its sentences)" if by_policy \
+        else "5-fold cross-validation (sentences from the same policy can appear in both train and test)"
+    print(f"{len(own)} own rows, scored by {mode}...\n")
 
     order = list(range(len(own)))
     random.Random(0).shuffle(order)
     probs = {}
-    for f in [order[i::5] for i in range(5)]:
+    if by_policy:
+        srcs = sorted({r["source"] for r in own})
+        folds = [[i for i, r in enumerate(own) if r["source"] == sr] for sr in srcs]
+    else:
+        folds = [order[i::5] for i in range(5)]
+    for f in folds:
         held = set(f)
         with contextlib.redirect_stdout(io.StringIO()):
             vec, clfs = T.fit(other + [own[i] for i in order if i not in held])

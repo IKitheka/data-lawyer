@@ -1,8 +1,10 @@
 {
-  "_note": "Evidence-based overrides from training/compare_cv.py (5-fold CV on own labelled rows, 2026-10). use_model: model beat keywords. use_keywords: keywords beat the model.",
+  "_note": "Evidence from compare_cv.py --by-policy (leave-one-policy-out, 5 policies, 2026-10). use_model: model beat keywords on unseen policies. use_keywords: keywords matched or beat the model.",
   "use_model": [
-    "right_access",
     "contact"
   ],
-  "use_keywords": []
+  "use_keywords": [
+    "opt_out",
+    "right_delete"
+  ]
 }
