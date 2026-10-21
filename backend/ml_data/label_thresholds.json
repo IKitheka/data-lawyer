@@ -7,5 +7,6 @@
   "opt_out": 0.25,
   "intl_transfer": 0.2,
   "contact": 0.25,
-  "retention_period": 0.5
+  "retention_period": 0.1,
+  "retention_vague": 0.3
 }

@@ -35,6 +35,11 @@ CONCRETE = re.compile(
     r"|\buntil\b|\bimmediately\b|\bas long as (you|your)\b|account is active|\bdeletes? (their|your|the) (own )?account"
 )
 
+# PolicyIE's "storage/retention/deletion" events also cover plain storage ("we store data on servers", ~90 events)
+# and deletion (~30). Without a stated period only real retention verbs count as retention_vague.
+RETAIN_WORDS = {"retain", "retains", "retained", "retention", "keep", "keeps", "kept",
+                "preserve", "preserves", "preserved", "hold", "holds", "held"}
+
 
 def parse_ann(path):
     ents, events = {}, []
@@ -102,7 +107,11 @@ def main():
                         labels.add(EVENT_LABEL[etype])
                     elif etype == "data-storage-retention-deletion":
                         spans = [ents[t][2] for n, t in args if n.startswith("Retention-Period") and t in ents]
-                        labels.add("retention_period" if any(CONCRETE.search(x) for x in spans) else "retention_vague")
+                        if spans:
+                            labels.add("retention_period" if any(CONCRETE.search(x) for x in spans) else "retention_vague")
+                        elif ents[trig][2] in RETAIN_WORDS:
+                            labels.add("retention_vague")
+                        # else: plain storage, hosting or deletion with no duration is not a retention statement
                     if any(n.startswith("Purpose-Argument") for n in argnames):
                         labels.add("purpose")
                     for n, t in args:
