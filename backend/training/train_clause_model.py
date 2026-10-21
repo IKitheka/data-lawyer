@@ -154,6 +154,11 @@ def main():
     vec, clfs = fit(final_rows)
     for label in clfs:
         thresholds.setdefault(label, 0.4)
+    th_file = Path("ml_data/label_thresholds.json")
+    if th_file.exists():  # thresholds measured on unseen policies beat ones tuned on a small validation split
+        override = {l: t for l, t in json.loads(th_file.read_text(encoding="utf-8")).items() if l in clfs}
+        thresholds.update(override)
+        print(f"Applied measured thresholds from {th_file} to {len(override)} labels")
     ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {

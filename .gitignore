@@ -216,3 +216,12 @@ backend/data_lawyer.db
 *.bak
 *.pem
 *.key
+backend/ml_data/batches/
+backend/ml_data/skipped_texts.txt
+backend/ml_data/batch_state.json
+backend/ans_*.txt
+backend/batch_answers.txt
+backend/ml_data/annotations/own_labeled.jsonl
+*.backup
+backend/json
+backend/shutil

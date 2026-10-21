@@ -8,6 +8,7 @@ Usage (from backend/):
     PYTHONPATH="$(pwd)" python training/compare_cv.py
 """
 import contextlib
+import json
 import io
 import random
 import sys
@@ -23,6 +24,8 @@ LABELS = ["right_access", "right_delete", "right_correct", "right_object", "righ
           "transfer_safeguards", "supervisory_authority", "contact",
           "arbitration_waiver", "policy_change_no_notice", "retention_period", "retention_vague"]
 THR = 0.40
+if "--thr" in sys.argv:  # e.g. --thr 0.25 : lower threshold = more recall, less precision
+    THR = float(sys.argv[sys.argv.index("--thr") + 1])
 MIN_N = 15
 
 
@@ -94,6 +97,34 @@ def main():
         if covered < len(own):
             verdict += " (some folds had too few examples to train)"
         print(f"{label:26s} {n:5d} | {f_kw:8.2f} | {f_ml:5.2f} {p:5.2f} {r:5.2f} | {verdict}")
+
+    if "--tune" in sys.argv:
+        grid = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]
+        tuned = {}
+        print("\nBest threshold per label, from predictions on unseen policies (labels with >= 10 examples):")
+        print(f"{'label':26s} {'n_pos':>5s} {'best':>5s} | {'F1':>5s} {'prec':>5s} {'rec':>5s} | {'F1@0.40':>7s} | {'keywords':>8s} {'model+kw':>8s}")
+        for label in LABELS:
+            y = np.array([1 if label in r["labels"] else 0 for r in own])
+            if int(y.sum()) < 10 or not any((label, i) in probs for i in range(len(own))):
+                continue
+            best, f40 = None, 0.0
+            for t in grid:
+                pm = np.array([1 if probs.get((label, i), 0.0) >= t else 0 for i in range(len(own))])
+                p, r, f = prf(y, pm)
+                if t == 0.40:
+                    f40 = f
+                if best is None or f > best[1] + 1e-9:
+                    best = (t, f, p, r)
+            tuned[label] = best[0]
+            pmb = np.array([1 if probs.get((label, i), 0.0) >= best[0] else 0 for i in range(len(own))])
+            kwv = np.array([int(_legacy_lookup(label, *legacy[i])) for i in range(len(own))])
+            f_kwv = prf(y, kwv)[2]
+            f_union = prf(y, np.maximum(pmb, kwv))[2]  # flag if EITHER the model or the keywords fire
+            print(f"{label:26s} {int(y.sum()):5d} {best[0]:5.2f} | {best[1]:5.2f} {best[2]:5.2f} {best[3]:5.2f} | {f40:7.2f} | {f_kwv:8.2f} {f_union:8.2f}")
+        if "--write-thresholds" in sys.argv:
+            with open("ml_data/label_thresholds.json", "w") as fh:
+                json.dump(tuned, fh, indent=2)
+            print(f"\nwrote ml_data/label_thresholds.json ({len(tuned)} labels). Retrain to apply them.")
 
 
 if __name__ == "__main__":
