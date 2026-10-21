@@ -13,11 +13,24 @@ ARTIFACT = Path(__file__).parent / "artifacts" / "clause_model.joblib"
 _SPLIT = re.compile(r"(?<=[.!?;])\s+|\n{1,}|\s*[•\u2022]\s*")
 
 
+# Numbers carry meaning as a CLASS ("12 months", "seven years", "30 days" are all "a stated duration"), not as
+# individual tokens. Mapping them to one token lets the classifier learn that class from few examples.
+_DURATION = re.compile(
+    r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirty|sixty|ninety)\b(?=[\s-]+(?:day|week|month|year)s?\b)"
+)
+
+
+def normalize_text(t: str) -> str:
+    t = t.lower()
+    t = _DURATION.sub(" durnum ", t)
+    return re.sub(r"\d+", " anynum ", t)
+
+
 class Vec:
     """Word (1-2gram) + char (3-5gram) TF-IDF, so wording variants still match."""
     def __init__(self):
-        self.w = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, min_df=1, lowercase=True)
-        self.c = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), sublinear_tf=True, min_df=2)
+        self.w = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, min_df=1, preprocessor=normalize_text)
+        self.c = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), sublinear_tf=True, min_df=2, preprocessor=normalize_text)
 
     def fit_transform(self, X):
         return hstack([self.w.fit_transform(X), self.c.fit_transform(X)]).tocsr()

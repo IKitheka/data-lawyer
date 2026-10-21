@@ -225,3 +225,5 @@ backend/ml_data/annotations/own_labeled.jsonl
 *.backup
 backend/json
 backend/shutil
+backend/ml_data/policy_cache/
+backend/ml_data/policy_sources.txt
