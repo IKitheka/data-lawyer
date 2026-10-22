@@ -2,12 +2,13 @@
   "_note": "Evidence: compare_cv.py --by-policy --tune (13 policies, 2026-10). model+keywords never beat the model alone by more than 0.01, so those keyword checks add nothing. right_object/right_portability switched at n=14/13 because the margin is very large; recheck after more rights-heavy policies.",
   "use_model": [
     "contact",
-    "right_access",
     "intl_transfer",
+    "opt_out",
+    "right_access",
+    "right_delete",
     "right_object",
     "right_portability",
-    "opt_out",
-    "right_delete"
+    "withdraw_consent"
   ],
   "use_keywords": []
 }

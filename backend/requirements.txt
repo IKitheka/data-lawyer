@@ -36,7 +36,7 @@ websockets==15.0.1
 wheel==0.45.1
 slowapi==0.1.9
 limits>=3.0
-scikit-learn>=1.5
-joblib>=1.4
-numpy>=1.26
-scipy>=1.11
+scikit-learn==1.9.1
+joblib==1.6.0
+numpy==2.5.4
+scipy==1.18.1

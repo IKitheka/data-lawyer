@@ -2,11 +2,11 @@
   "right_access": 0.2,
   "right_delete": 0.25,
   "right_correct": 0.1,
-  "right_object": 0.2,
-  "right_portability": 0.2,
-  "opt_out": 0.25,
+  "right_object": 0.25,
+  "right_portability": 0.15,
+  "opt_out": 0.2,
   "intl_transfer": 0.2,
   "contact": 0.25,
-  "retention_period": 0.25,
+  "retention_period": 0.15,
   "retention_vague": 0.25
 }

@@ -90,7 +90,9 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
     add(sharing["sale_of_data"], 18, "Mentions selling/sharing personal info (verify opt-out).", "sale")
     add(tracking["ads_marketing"], 8, "Data used for advertising/marketing (look for opt-out).", "advertising")
     add(tracking["cookies_or_tracking"], 6, "Tracking/cookies/analytics mentioned (check consent controls).", "tracking")
-    add(has("retention_vague") and not has("retention_period"), 6, "Retention mentioned but duration unclear.", "retention_vague")
+    vague, period = has("retention_vague"), has("retention_period")
+    add(vague and not period, 6, "Retention mentioned but duration unclear.", "retention_vague")
+    add(vague and period, 3, "Some retention statements are open-ended (no clear period or end condition).", "retention_vague")
     add(has("arbitration_waiver"), 14, "Arbitration/class-action waiver may limit legal options.", "arbitration_waiver")
     add(has("policy_change_no_notice"), 10, "Policy may change without notice.", "policy_change_no_notice")
     add(cross_border["international_transfers"] and not cross_border["safeguards"], 8,
