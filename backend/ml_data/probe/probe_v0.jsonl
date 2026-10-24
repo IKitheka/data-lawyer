@@ -1,0 +1,45 @@
+{"text": "We gather your name and email when you sign up.", "labels": ["collection"]}
+{"text": "Information we obtain includes your location and the pages you visit.", "labels": ["collection"]}
+{"text": "We record your IP address and the type of device you use.", "labels": ["collection", "tracking"]}
+{"text": "We ask you for a phone number and a delivery address at checkout.", "labels": ["collection"]}
+{"text": "Details such as your age and gender may be requested in your profile.", "labels": ["collection"]}
+{"text": "Your data helps us run and improve the app.", "labels": ["purpose"]}
+{"text": "We process your information to prevent fraud and keep accounts safe.", "labels": ["purpose"]}
+{"text": "We rely on your details to respond to support requests.", "labels": ["purpose"]}
+{"text": "Usage data allows us to personalise what you see.", "labels": ["purpose"]}
+{"text": "We pass your details to companies that help us market our products.", "labels": ["share_third_party", "advertising"]}
+{"text": "Your information may be made available to other organisations.", "labels": ["share_third_party"]}
+{"text": "We share data with advertising partners.", "labels": ["share_third_party", "advertising"]}
+{"text": "Third parties may receive your personal data from us.", "labels": ["share_third_party"]}
+{"text": "We give some of your information to our corporate affiliates.", "labels": ["share_third_party"]}
+{"text": "Data may be disclosed to authorities if the law requires it.", "labels": ["share_third_party"]}
+{"text": "We use your data to show you relevant ads.", "labels": ["advertising", "purpose"]}
+{"text": "Marketing messages are sent based on your interests.", "labels": ["advertising"]}
+{"text": "Advertisers can target you using the profile we build.", "labels": ["advertising"]}
+{"text": "We use cookies to remember your preferences.", "labels": ["tracking"]}
+{"text": "Pixel tags and similar technologies tell us how you use our emails.", "labels": ["tracking"]}
+{"text": "Analytics services monitor how visitors move around our site.", "labels": ["tracking"]}
+{"text": "Our app includes software that tracks what you tap.", "labels": ["tracking"]}
+{"text": "We keep data for 12 months.", "labels": ["retention_period"]}
+{"text": "Your records are deleted 90 days after you close your account.", "labels": ["retention_period"]}
+{"text": "Backups are stored for up to 30 days before being overwritten.", "labels": ["retention_period"]}
+{"text": "We hold payment records for seven years as required by tax law.", "labels": ["retention_period"]}
+{"text": "Messages remain on our servers for two years.", "labels": ["retention_period"]}
+{"text": "We store your information for as long as we consider appropriate.", "labels": ["retention_vague"]}
+{"text": "Data may be kept for business reasons.", "labels": ["retention_vague"]}
+{"text": "We hold on to your details for an unspecified period.", "labels": ["retention_vague"]}
+{"text": "Information is retained as long as needed.", "labels": ["retention_vague"]}
+{"text": "We encrypt data in transit and at rest.", "labels": ["security"]}
+{"text": "Access to personal information is limited to authorised staff.", "labels": ["security"]}
+{"text": "We use firewalls and regular penetration tests to protect our systems.", "labels": ["security"]}
+{"text": "Our servers are protected by industry standard safeguards.", "labels": ["security"]}
+{"text": "Thanks for visiting our website.", "labels": []}
+{"text": "This notice explains our approach to privacy.", "labels": []}
+{"text": "Our team is based in Nairobi and London.", "labels": []}
+{"text": "You must be at least 18 years old to use the service.", "labels": []}
+{"text": "Please contact us if anything is unclear.", "labels": []}
+{"text": "The service is provided as is without warranties.", "labels": []}
+{"text": "These terms are governed by the laws of Kenya.", "labels": []}
+{"text": "We may change this policy from time to time.", "labels": []}
+{"text": "You can close your account from the settings page.", "labels": []}
+{"text": "Our company was started in 2015.", "labels": []}

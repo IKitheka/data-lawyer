@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from urllib.parse import urlparse
@@ -9,14 +10,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.app.core.auth import require_api_key
 from backend.app.core.analytics import log_event
-from backend.app.core.limiter import check_rate_limit
+from backend.app.core.limiter import _parse_rpm, check_rate_limit
 from backend.app.api.schemas import AnalyzeRequest
 
-# Optional LLM upgrade (only used if DL_USE_LLM=1 and OPENAI_API_KEY is set)
+# Data Lawyer's own trained model (no external LLM/API). Falls back to heuristics if no model is trained yet.
 try:
-    from backend.app.core.llm_judge import llm_analyze_policy
-except Exception:
-    llm_analyze_policy = None  # type: ignore
+    from backend.app.ml.analyzer import ml_analyze
+    from backend.app.ml.clause_model import ModelNotReady
+except Exception:  # pragma: no cover
+    ml_analyze = None  # type: ignore
+
+    class ModelNotReady(RuntimeError):  # type: ignore
+        pass
 
 
 router = APIRouter()
@@ -266,7 +271,15 @@ async def analyze_policy(
     api_key = getattr(request.state, "api_key", None) or "anon"
     rpm = getattr(plan, "rpm", "30/minute")
 
-    allowed, meta = check_rate_limit(api_key, rpm)
+    # Never put the raw API key into Redis key names (they show up in provider logs/consoles).
+    key_id = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    client_id = (request.headers.get("X-Client-Id") or "anon")[:64]
+
+    # 1) per-install limit (so one noisy user cannot exhaust the shared public beta key for everyone)
+    allowed, meta = check_rate_limit(f"{key_id}:{client_id}", rpm)
+    # 2) hard ceiling per key, so rotating fake client ids cannot bypass limiting
+    if allowed:
+        allowed, meta = check_rate_limit(f"{key_id}:all", f"{_parse_rpm(rpm) * 50}/minute")
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -291,64 +304,26 @@ async def analyze_policy(
     text = text[:20000]  # safety limit
 
     # ---------------------------
-    # Choose analyzer (LLM vs heuristic)
+    # Choose analyzer (own ML model, heuristic fallback)
     # ---------------------------
-    use_llm = os.getenv("DL_USE_LLM", "0") == "1"
     result: Dict[str, Any]
-
-    if use_llm and llm_analyze_policy is not None:
-        try:
-            llm = await llm_analyze_policy(url=url, text=text)
-
-            # Normalize + enforce safe shape
-            risk_score = int(llm.get("risk_score", 0))
-            risk_score = max(0, min(100, risk_score))
-
-            risk_level = str(llm.get("risk_level", "LOW")).upper()
-            if risk_level not in ("LOW", "MEDIUM", "HIGH"):
-                risk_level = "LOW" if risk_score < 40 else ("MEDIUM" if risk_score < 70 else "HIGH")
-
-            red_flags = llm.get("red_flags", []) or []
-            if not isinstance(red_flags, list):
-                red_flags = []
-            red_flags = [str(x) for x in red_flags][:12]
-
-            jurisdiction = str(llm.get("jurisdiction", "UNKNOWN")).upper()
-            summary_md = str(llm.get("summary_markdown", "") or "").strip()
-
-            # Ensure structured exists
-            structured = {
-                "site": _domain_from_url(url),
-                "jurisdiction": jurisdiction,
-                "controller_hint": llm.get("controller_hint"),
-                "contacts": llm.get("contacts") or _extract_contacts(text),
-                "rights": llm.get("rights") or {},
-                "sharing": llm.get("sharing") or {},
-                "retention": llm.get("retention") or {},
-                "tracking": llm.get("tracking") or {},
-                "cross_border": llm.get("cross_border") or {},
-                "complaints": llm.get("complaints") or {},
-                "gdpr_signal": bool(llm.get("jurisdiction") == "EU") or "gdpr" in _t(text),
-                "llm_used": True,
-            }
-
-            result = {
-                "risk_level": risk_level,
-                "risk_score": risk_score,
-                "summary": summary_md or _heuristic_analyze(url, text)["summary"],
-                "red_flags": red_flags,
-                "jurisdiction": jurisdiction,
-                "service_name": service_name,
-                "llm_model": os.getenv("DL_LLM_MODEL", "gpt-4o-mini"),
-                "structured": structured,
-            }
-        except Exception:
-            # If LLM fails, fall back to heuristic (never break prod)
-            result = _heuristic_analyze(url, text)
-            result["service_name"] = service_name
-    else:
+    try:
+        if ml_analyze is None:
+            raise ModelNotReady("ml package unavailable")
+        result = ml_analyze(
+            url=url,
+            text=text,
+            domain=_domain_from_url(url),
+            jurisdiction=_detect_jurisdiction(text),
+            contacts=_extract_contacts(text),
+            legacy=_heuristic_analyze(url, text)["structured"],  # transitional fallback, removed as data grows
+        )
+    except ModelNotReady:
         result = _heuristic_analyze(url, text)
-        result["service_name"] = service_name
+    except Exception:
+        # Never break prod: fall back to heuristics on any ML error
+        result = _heuristic_analyze(url, text)
+    result["service_name"] = service_name
 
     # ---------------------------
     # Analytics
@@ -362,7 +337,7 @@ async def analyze_policy(
                 "risk_level": result.get("risk_level"),
                 "risk_score": result.get("risk_score"),
                 "client_id": request.headers.get("X-Client-Id"),
-                "llm_used": bool(result.get("structured", {}).get("llm_used")),
+                "ml_used": bool(result.get("structured", {}).get("ml_used")),
                 "env": os.getenv("ENV", "production"),
             },
         )

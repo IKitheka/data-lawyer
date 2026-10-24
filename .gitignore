@@ -208,3 +208,22 @@ __marimo__/
 .env
 .venv
 backend/data_lawyer.db
+
+# --- secrets & junk ---
+.env
+.env.*
+!.env.example
+*.bak
+*.pem
+*.key
+backend/ml_data/batches/
+backend/ml_data/skipped_texts.txt
+backend/ml_data/batch_state.json
+backend/ans_*.txt
+backend/batch_answers.txt
+backend/ml_data/annotations/own_labeled.jsonl
+*.backup
+backend/json
+backend/shutil
+backend/ml_data/policy_cache/
+backend/ml_data/policy_sources.txt

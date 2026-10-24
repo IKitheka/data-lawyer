@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hmac
 import os
 from dataclasses import dataclass
 
@@ -62,11 +63,26 @@ def configured_keys() -> dict[str, Plan]:
 
     return m
 
+def _is_dev() -> bool:
+    """Relaxed auth is only ever allowed when ENV is explicitly a dev/test value."""
+    return _norm(os.getenv("ENV", "production")).lower() in ("dev", "development", "local", "test")
+
+
+def _lookup(keys: dict[str, Plan], api_key: str) -> Plan | None:
+    """Constant-time key comparison (no early exit that leaks how much of a key matched)."""
+    found: Plan | None = None
+    for k, plan in keys.items():
+        if hmac.compare_digest(k.encode(), api_key.encode()):
+            found = plan
+    return found
+
+
 def resolve_plan_from_api_key(api_key: str) -> Plan:
     api_key = _norm(api_key)
+    dev = _is_dev()
 
-    # Optional prefix mode (handy for testing without managing env keys)
-    if _truthy(os.getenv("API_KEY_PREFIX_MODE")):
+    # Prefix mode lets ANY caller claim a plan by key prefix (e.g. "admin_x"), so it is dev/test only.
+    if dev and _truthy(os.getenv("API_KEY_PREFIX_MODE")):
         low = api_key.lower()
         if low.startswith("free_"):
             return FREE
@@ -79,20 +95,13 @@ def resolve_plan_from_api_key(api_key: str) -> Plan:
 
     keys = configured_keys()
 
-    # Production switch: require configured keys
-    if _truthy(os.getenv("REQUIRE_API_KEYS")):
-        if not keys:
-            raise ValueError("No API keys configured")
-        plan = keys.get(api_key)
+    if keys:
+        plan = _lookup(keys, api_key)
         if not plan:
             raise ValueError("Invalid API key")
         return plan
 
-    # Dev fallback: accept any non-empty key as FREE if none configured
-    if not keys:
+    # No keys configured: fail CLOSED in production. Dev/test may accept any non-empty key as FREE.
+    if dev and not _truthy(os.getenv("REQUIRE_API_KEYS")):
         return FREE
-
-    plan = keys.get(api_key)
-    if not plan:
-        raise ValueError("Invalid API key")
-    return plan
+    raise ValueError("No API keys configured")
