@@ -11,6 +11,15 @@ from backend.app.ml.taxonomy import RIGHTS_MAP
 
 MIN_CONF = 0.40
 
+# Measured on 10 real privacy policies: 35%-76% of their sentences describe a data practice. Pages that are not
+# policies score far lower (a legal contract 14%, two encyclopedia articles 12%-15%).
+PRACTICE = {"collection", "purpose", "share_third_party", "service_provider", "sale", "advertising", "tracking",
+            "retention_period", "retention_vague", "security", "right_access", "right_delete", "right_correct",
+            "right_object", "right_portability", "withdraw_consent", "opt_out", "intl_transfer",
+            "transfer_safeguards", "supervisory_authority", "contact", "children"}
+MIN_POLICY_SHARE = 0.25
+MIN_SENTENCES = 10
+
 
 def _evidence(clauses: List[Dict], label: str, k: int = 2) -> List[Dict[str, Any]]:
     hits = [(c["scores"].get(label, 0.0), c["clause"]) for c in clauses if label in c["labels"]]
@@ -42,6 +51,9 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
                legacy: Dict[str, Any] | None = None) -> Dict[str, Any]:
     clauses = predict_clauses(text)
     covered = covered_labels()
+    practice_n = sum(1 for c in clauses if PRACTICE & set(c["labels"]))
+    policy_share = practice_n / max(1, len(clauses))
+    looks_like_policy = len(clauses) >= MIN_SENTENCES and policy_share >= MIN_POLICY_SHARE
     tl = (text or "").lower()
     legacy = legacy or {}
     fallback_used: set = set()
@@ -149,10 +161,28 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
         "llm_used": False,
         "ml_used": True,
         "clauses_analyzed": len(clauses),
+        "looks_like_policy": looks_like_policy,
+        "policy_share": round(policy_share, 3),
         "model_labels": sorted(covered),
         "legacy_fallback_labels": sorted(fallback_used),
         "evidence": ev,
     }
+    if not looks_like_policy:
+        # Not a privacy policy: any "finding" would be noise, so say so instead of showing a risk score.
+        for grp in ("rights", "sharing", "retention", "tracking", "cross_border", "complaints"):
+            structured[grp] = {k: False for k in structured[grp]}
+        structured["evidence"] = {}
+        level, score, red_flags = "LOW", 0, []
+        summary = "\n".join([
+            "## Policy Summary",
+            f"**Site:** {domain}",
+            "",
+            "### This page doesn't look like a privacy policy",
+            f"- Only {policy_share:.0%} of its sentences describe how personal data is handled "
+            f"(real policies score {MIN_POLICY_SHARE:.0%} or more).",
+            "- No risk assessment was made, so the score of 0 means \"not assessed\", not \"safe\".",
+            "- Open the privacy policy page itself and run the analysis there.",
+        ])
     return {
         "risk_level": level,
         "risk_score": score,
