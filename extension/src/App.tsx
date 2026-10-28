@@ -498,6 +498,22 @@ function exportPdf() {
             <div style={{ marginTop: 8, fontSize: 12, color: UI.muted, lineHeight: 1.5 }}>
               Open a privacy/terms page, then click <b>Analyze now</b>.
             </div>
+            {error ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  borderRadius: 14,
+                  border: `1px solid rgba(239,68,68,0.35)`,
+                  background: "rgba(239,68,68,0.10)",
+                  padding: "10px 12px",
+                  fontSize: 12,
+                  color: UI.text,
+                  fontWeight: 800,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
           </>
         ) : (
           <>
@@ -581,7 +597,7 @@ function exportPdf() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <InfoRow label="Jurisdiction" value={analysis.jurisdiction || "UNKNOWN"} />
                     {(analysis as any)?.llm_model ? (
-                      <InfoRow label="LLM model" value={String((analysis as any).llm_model)} />
+                      <InfoRow label="Analysis model" value={String((analysis as any).llm_model)} />
                     ) : null}
                   </div>
                 </>
