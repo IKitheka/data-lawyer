@@ -3,7 +3,7 @@ import type { ManifestV3Export } from "@crxjs/vite-plugin";
 const manifest: ManifestV3Export = {
   manifest_version: 3,
   name: "Data Lawyer",
-  version: "1.0.1",
+  version: "1.0.2",
   description: "Analyzes privacy policies and shows risk in your browser.",
 
   action: {

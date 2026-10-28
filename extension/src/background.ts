@@ -1,7 +1,7 @@
 // src/background.ts
 import { analyzePolicy } from "./api/policies";
 
-const REQUEST_TIMEOUT_MS = 20000;
+const REQUEST_TIMEOUT_MS = 75000;
 const MIN_GAP_MS = 6000; // at most 1 request per 6s per tab
 
 type InFlightEntry = {
