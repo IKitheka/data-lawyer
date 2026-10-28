@@ -4,6 +4,7 @@ Returns the same dict shape as policies._heuristic_analyze so the extension need
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 from urllib.parse import parse_qs, urlparse
 
@@ -19,6 +20,22 @@ PRACTICE = {"collection", "purpose", "share_third_party", "service_provider", "s
             "right_object", "right_portability", "withdraw_consent", "opt_out", "intl_transfer",
             "transfer_safeguards", "supervisory_authority", "contact", "children"}
 MIN_POLICY_SHARE = 0.25
+# Pages whose address looks like a privacy/terms page get a lower cutoff: terms pages carry fewer practice
+# sentences (Zoom terms measured 24-29% from browser text, news pages 18-19%).
+MIN_POLICY_SHARE_URL = 0.15
+POLICY_SEGMENTS = {"privacy", "privacy-policy", "privacy-statement", "privacy-notice", "terms", "terms-of-service",
+                   "terms-of-use", "terms-and-conditions", "legal", "cookies", "cookie-policy", "gdpr", "ccpa",
+                   "cpra", "data-policy", "data-protection"}
+
+
+def looks_like_policy_url(url: str) -> bool:
+    try:
+        u = urlparse(url or "")
+    except ValueError:
+        return False
+    if (u.hostname or "").lower().startswith("privacy"):
+        return True
+    return any(seg.lower() in POLICY_SEGMENTS for seg in u.path.split("/") if seg)
 MIN_SENTENCES = 10
 
 # Search engines show snippets of the policies they link to, so a results page can look like a policy (a Google
@@ -71,7 +88,8 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
     practice_n = sum(1 for c in clauses if PRACTICE & set(c["labels"]))
     policy_share = practice_n / max(1, len(clauses))
     search_page = is_search_results_page(url)
-    looks_like_policy = len(clauses) >= MIN_SENTENCES and policy_share >= MIN_POLICY_SHARE and not search_page
+    min_share = MIN_POLICY_SHARE_URL if looks_like_policy_url(url) else MIN_POLICY_SHARE
+    looks_like_policy = len(clauses) >= MIN_SENTENCES and policy_share >= min_share and not search_page
     tl = (text or "").lower()
     legacy = legacy or {}
     fallback_used: set = set()
@@ -198,7 +216,7 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
             "### This page doesn't look like a privacy policy",
             ("- This is a search results page, not a privacy policy." if search_page else
              f"- Only {policy_share:.0%} of its sentences describe how personal data is handled "
-             f"(real policies score {MIN_POLICY_SHARE:.0%} or more)."),
+             f"(real policies score {min_share:.0%} or more)."),
             "- No risk assessment was made, so the score of 0 means \"not assessed\", not \"safe\".",
             "- Open the privacy policy page itself and run the analysis there.",
         ])
