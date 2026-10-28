@@ -46,21 +46,35 @@ async function alreadyAnalyzed(url: string, text: string): Promise<boolean> {
     const key = `dl_auto_${new URL(url).hostname}`;
     const res = await chrome.storage.local.get([key]);
     if (res?.[key] === hash) return true;
-    await chrome.storage.local.set({ [key]: hash });
     return false;
   } catch {
     return false;
   }
 }
 
-async function runAnalysis(): Promise<void> {
+async function markAnalyzed(url: string, text: string): Promise<void> {
+  try {
+    const hash = await sha256Hex(text);
+    await chrome.storage.local.set({ [`dl_auto_${new URL(url).hostname}`]: hash });
+  } catch {
+    // ignore
+  }
+}
+
+let forceNext = false;
+
+async function runAnalysis(force = false): Promise<void> {
   try {
     const url = location.href;
     const title = document.title || undefined;
     const text = getCleanText();
 
-    if (!isLikelyPolicyPage(url, text)) return;
-    if (await alreadyAnalyzed(url, text)) return;
+    if (force) {
+      if (!text) return;
+    } else {
+      if (!isLikelyPolicyPage(url, text)) return;
+      if (await alreadyAnalyzed(url, text)) return;
+    }
 
     const msg: AnalyzeMsg = {
       type: "ANALYZE_POLICY",
@@ -70,22 +84,26 @@ async function runAnalysis(): Promise<void> {
       service_name: new URL(url).hostname,
     };
 
-    chrome.runtime.sendMessage(msg, () => {
-      // keep quiet in production
+    chrome.runtime.sendMessage(msg, (res: any) => {
+      if (chrome.runtime.lastError) return;
+      if (res?.ok) void markAnalyzed(url, text);
     });
   } catch {
     // ignore
   }
 }
 
-function scheduleAuto(): void {
+function scheduleAuto(force = false): void {
+  if (force) forceNext = true;
   if (scheduled) return;
   scheduled = true;
 
   setTimeout(async () => {
     scheduled = false;
-    await runAnalysis();
-  }, 1200);
+    const f = forceNext;
+    forceNext = false;
+    await runAnalysis(f);
+  }, force ? 0 : 1200);
 }
 
 function hookHistory(): void {
@@ -115,7 +133,7 @@ chrome.runtime.onMessage.addListener((msg: any, _sender, sendResponse) => {
   }
 
   if (msg?.type === "FORCE_ANALYZE") {
-    scheduleAuto();
+    scheduleAuto(true);
     sendResponse({ ok: true });
     return true;
   }
