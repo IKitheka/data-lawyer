@@ -5,6 +5,7 @@ Returns the same dict shape as policies._heuristic_analyze so the extension need
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from urllib.parse import parse_qs, urlparse
 
 from backend.app.ml.clause_model import covered_labels, model_version, predict_clauses
 from backend.app.ml.taxonomy import RIGHTS_MAP
@@ -19,6 +20,22 @@ PRACTICE = {"collection", "purpose", "share_third_party", "service_provider", "s
             "transfer_safeguards", "supervisory_authority", "contact", "children"}
 MIN_POLICY_SHARE = 0.25
 MIN_SENTENCES = 10
+
+# Search engines show snippets of the policies they link to, so a results page can look like a policy (a Google
+# results page for "instagram policies" measured 28% practice sentences). The address tells us it is not one.
+SEARCH_HOSTS = ("google.", "bing.com", "duckduckgo.com", "search.yahoo.com", "search.brave.com", "ecosia.org",
+                "yandex.", "baidu.com")
+
+
+def is_search_results_page(url: str) -> bool:
+    try:
+        u = urlparse(url or "")
+    except ValueError:
+        return False
+    host = (u.hostname or "").lower()
+    if not any(h in host for h in SEARCH_HOSTS):
+        return False
+    return u.path.startswith("/search") or (u.path in ("", "/") and "q" in parse_qs(u.query))
 
 
 def _evidence(clauses: List[Dict], label: str, k: int = 2) -> List[Dict[str, Any]]:
@@ -53,7 +70,8 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
     covered = covered_labels()
     practice_n = sum(1 for c in clauses if PRACTICE & set(c["labels"]))
     policy_share = practice_n / max(1, len(clauses))
-    looks_like_policy = len(clauses) >= MIN_SENTENCES and policy_share >= MIN_POLICY_SHARE
+    search_page = is_search_results_page(url)
+    looks_like_policy = len(clauses) >= MIN_SENTENCES and policy_share >= MIN_POLICY_SHARE and not search_page
     tl = (text or "").lower()
     legacy = legacy or {}
     fallback_used: set = set()
@@ -178,8 +196,9 @@ def ml_analyze(url: str, text: str, domain: str, jurisdiction: str, contacts: Di
             f"**Site:** {domain}",
             "",
             "### This page doesn't look like a privacy policy",
-            f"- Only {policy_share:.0%} of its sentences describe how personal data is handled "
-            f"(real policies score {MIN_POLICY_SHARE:.0%} or more).",
+            ("- This is a search results page, not a privacy policy." if search_page else
+             f"- Only {policy_share:.0%} of its sentences describe how personal data is handled "
+             f"(real policies score {MIN_POLICY_SHARE:.0%} or more)."),
             "- No risk assessment was made, so the score of 0 means \"not assessed\", not \"safe\".",
             "- Open the privacy policy page itself and run the analysis there.",
         ])
